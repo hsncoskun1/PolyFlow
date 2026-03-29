@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>POLYFLOW - Multi-Asset Trading Bot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/polyflow.css">
+</head>
+<body>
+<div class="app-layout">
+
+  <!-- ═══════════ SIDEBAR ═══════════ -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-logo">P</div>
+      <span class="sidebar-title">POLYFLOW</span>
+      <button class="notif-bell sidebar-bell" id="notif-bell" onclick="toggleNotifDropdown()" title="Bildirimler">
+        🔔<span class="notif-badge" id="notif-badge" style="display:none">0</span>
+      </button>
+      <div class="notif-dropdown" id="notif-dropdown" style="display:none;">
+        <div class="notif-header"><span>Bildirimler</span><button onclick="markAllRead()">Temizle</button></div>
+        <div class="notif-list" id="notif-list"><div class="notif-empty">Bildirim yok</div></div>
+      </div>
+    </div>
+
+    <!-- Connection Status -->
+    <div class="sidebar-connections">
+      <div class="conn-row"><span class="status-dot offline" id="conn-clob"></span><span title="Polymarket CLOB WebSocket — anlık UP/DOWN token fiyatları">CLOB WS API</span></div>
+      <div class="conn-row"><span class="status-dot offline" id="conn-btc"></span><span title="Binance WebSocket — gerçek kripto fiyatları (BTC, ETH vb.)">Price Feed</span></div>
+      <div class="conn-row"><span class="status-dot offline" id="conn-gamma"></span><span title="Polymarket Gamma API — aktif crypto event taraması">Gamma API</span></div>
+      <div class="conn-row"><span class="status-dot offline" id="conn-relayer"></span><span title="Polymarket Gasless Relayer — gaz ücretsiz işlem imzalama">Relayer API</span></div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <div class="nav-section-label">Ekranlar</div>
+      <div class="nav-item active" data-page="watchlist" onclick="switchPage('watchlist')">
+        <span class="nav-icon">📡</span><span>Marketler</span>
+        <span class="nav-badge" id="nav-pinned-count">3</span>
+      </div>
+      <div class="nav-item" data-page="positions" onclick="switchPage('positions')">
+        <span class="nav-icon">💼</span><span>Pozisyonlar</span>
+        <span class="nav-badge" id="nav-pos-count" style="display:none">0</span>
+      </div>
+      <div class="nav-item" data-page="history" onclick="switchPage('history')">
+        <span class="nav-icon">📜</span><span>İşlem Geçmişi</span>
+      </div>
+
+      <div class="nav-section-label">KONTROL</div>
+
+      <!-- Settings (collapsible parent) -->
+      <div class="nav-item has-submenu" id="nav-settings-parent" onclick="toggleNavSubmenu('settings'); switchPage('settings')">
+        <span class="nav-icon">⚙️</span><span>Ayarlar</span>
+      </div>
+      <div class="nav-submenu" id="submenu-settings">
+        <div class="nav-subitem" data-page="settings" onclick="switchPage('settings')">
+          <span class="nav-subitem-icon">🔧</span><span>Genel</span>
+        </div>
+        <!-- Strategy sub-item (also collapsible) -->
+        <div class="nav-subitem has-submenu" id="nav-strategy-parent" onclick="toggleNavSubmenu('strategy')">
+          <span class="nav-subitem-icon">🎯</span><span>Strateji</span>
+        </div>
+        <div class="nav-sub-submenu" id="submenu-strategy">
+          <div class="nav-subsubitem" data-page="strategy" onclick="switchPage('strategy')">
+            <span>📥 Giriş Kuralları</span>
+          </div>
+          <div class="nav-subsubitem" data-page="strategy" onclick="switchPage('strategy')">
+            <span>📤 Çıkış Kuralları</span>
+          </div>
+        </div>
+        <!-- Wallet sub-item -->
+        <div class="nav-subitem" data-page="wallet" onclick="switchPage('wallet')">
+          <span class="nav-subitem-icon">👛</span><span>Wallet</span>
+        </div>
+      </div>
+
+      <div class="nav-item" data-page="logs" onclick="switchPage('logs')">
+        <span class="nav-icon">📋</span><span>Kayıtlar</span>
+      </div>
+    </nav>
+
+    <div class="sidebar-status">
+      <div class="status-row">
+        <span class="status-label">Bot</span>
+        <span class="status-value"><span class="status-dot offline" id="bot-status-dot"></span><span id="bot-status-text">Durduruldu</span></span>
+      </div>
+      <!-- Bot başlatılmamışken: tek buton -->
+      <div class="status-row" id="bot-start-row" style="margin-top:4px;">
+        <button class="btn-bot-sidebar start" id="bot-toggle-btn" onclick="toggleBot()" style="width:100%;">▶ Bot Başlat</button>
+      </div>
+      <!-- Bot çalışırken: ikiye bölünmüş buton -->
+      <div class="status-row bot-running-btns" id="bot-running-row" style="display:none;gap:6px;margin-top:4px;">
+        <button class="btn-bot-sidebar pause-half" id="btn-pause" onclick="pauseBot()">⏸ Duraklat</button>
+        <button class="btn-bot-sidebar stop-half" id="btn-stop" onclick="stopBot()">⏹ Durdur</button>
+      </div>
+      <div class="status-row">
+        <span class="status-label">Durum</span>
+        <span class="status-value text-purple" id="sidebar-mode">—</span>
+      </div>
+      <div class="status-row">
+        <span class="status-label">Çalışma</span>
+        <span class="status-value text-mono" id="sidebar-runtime">00:00:00</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ═══════════ MAIN ═══════════ -->
+  <main class="main-content">
+
+    <!-- Content -->
+    <div class="content-area" id="content-area">
+
+      <!-- ══════════════════════════════════════════
+           PAGE: WATCHLIST — Accordion Event List
+           ══════════════════════════════════════════ -->
+      <div class="page active" id="page-watchlist">
+
+        <!-- Toolbar -->
+        <div class="events-toolbar">
+          <!-- Row 1: controls -->
+          <div class="toolbar-row toolbar-controls-row">
+            <div class="live-badge">
+              <span class="live-dot"></span>Live
+            </div>
+            <span class="text-muted text-sm" id="events-count">8 markets</span>
+            <!-- Timeframe + Market filter tabs -->
+            <div class="tf-tabs" id="tf-tabs">
+              <button class="tf-tab" id="tf-btn-PINNED" onclick="setTimeframe('PINNED')">📌 Pinli</button>
+              <button class="tf-tab tf-tab-all" id="tf-btn-ALL" onclick="setTimeframe('ALL')">Tümü</button>
+              <button class="tf-tab active" id="tf-btn-5M" onclick="setTimeframe('5M')">5DK</button>
+              <button class="tf-tab" id="tf-btn-15M" onclick="setTimeframe('15M')">15DK</button>
+              <button class="tf-tab" id="tf-btn-1H" onclick="setTimeframe('1H')">1SA</button>
+              <button class="tf-tab" id="tf-btn-4H" onclick="setTimeframe('4H')">4SA</button>
+              <button class="tf-tab" id="tf-btn-1D" onclick="setTimeframe('1D')">1G</button>
+            </div>
+            <!-- Asset chips -->
+            <div class="asset-chips" id="asset-chips"></div>
+            <!-- Sort bar -->
+            <div class="sort-bar">
+              <span class="sort-label">Sırala:</span>
+              <button class="sort-btn active" id="sort-rules-btn" onclick="setSortMode('rules')" title="En çok kural sağlayan">🎯 Rules</button>
+              <button class="sort-btn" id="sort-countdown-btn" onclick="setSortMode('countdown')" title="En acil event önce">⏱ Süre</button>
+              <button class="sort-btn" id="sort-name-btn" onclick="setSortMode('name')" title="Alfabetik">A–Z</button>
+              <button class="sort-btn" id="sort-manual-btn" onclick="setSortMode('manual')" title="Sürükle-bırak ile özel sıralama">☰ Manuel</button>
+            </div>
+          </div>
+          <!-- Row 2: stats -->
+          <div class="toolbar-row toolbar-stats-row">
+            <div class="toolbar-stat">
+              <span class="toolbar-stat-lbl">Bakiye</span>
+              <span class="toolbar-stat-val" id="tb-balance">$0.00</span>
+            </div>
+            <div class="toolbar-stat-divider"></div>
+            <div class="toolbar-stat">
+              <span class="toolbar-stat-lbl">P&amp;L</span>
+              <span class="toolbar-stat-val" id="tb-pnl">$0.00</span>
+            </div>
+            <div class="toolbar-stat-divider"></div>
+            <div class="toolbar-stat">
+              <span class="toolbar-stat-lbl">Kazanma Oranı</span>
+              <span class="toolbar-stat-val" id="tb-winrate">0%</span>
+            </div>
+            <div class="toolbar-stat-divider"></div>
+            <div class="toolbar-stat">
+              <span class="toolbar-stat-lbl">Aktif İşlem</span>
+              <span class="toolbar-stat-val" id="tb-trades">0</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Accordion Event Cards -->
+        <div class="events-list" id="events-list">
+          <div class="text-center text-muted" style="padding:60px 20px;">
+            <div style="font-size:36px;margin-bottom:12px;">📡</div>
+            Bağlanıyor...
+          </div>
+        </div>
+
+      </div>
+
+    </div><!-- /content-area -->
+
+    <!-- ══════════════════════════════════════════
+         PAGE MODAL (positions, history, settings, etc.)
+         ══════════════════════════════════════════ -->
+    <div class="page-modal-overlay" id="page-modal-overlay" onclick="closePageModal()" style="display:none;"></div>
+    <div class="page-modal" id="page-modal" style="display:none;">
+      <div class="page-modal-header">
+        <h2 class="page-modal-title" id="page-modal-title">Settings</h2>
+        <button class="page-modal-close" onclick="closePageModal()">✕</button>
+      </div>
+      <div class="page-modal-body" id="page-modal-body">
+        <!-- Content injected dynamically -->
+      </div>
+    </div>
+
+
+  </main>
+</div>
+
+<!-- Hidden page templates (used by modal) -->
+<div id="page-templates" style="display:none;">
+  <!-- POSITIONS -->
+  <div id="tpl-positions">
+    <div class="tabs">
+      <button class="tab active" onclick="filterPositions('open',this)">Açık</button>
+      <button class="tab" onclick="filterPositions('closed',this)">Kapalı</button>
+      <button class="tab" onclick="filterPositions('all',this)">Tümü</button>
+    </div>
+    <table class="data-table" style="margin-top:14px;">
+      <thead><tr>
+        <th>Asset</th><th>Event</th><th>Side</th>
+        <th>Entry</th><th>Current</th><th>Target</th><th>SL</th>
+        <th>P&L</th><th>Status</th><th>Action</th>
+      </tr></thead>
+      <tbody id="positions-tbody">
+        <tr><td colspan="10" class="text-center text-muted" style="padding:24px;">No positions</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- HISTORY -->
+  <div id="tpl-history">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px;">
+      <div class="tabs" style="margin:0;">
+        <button class="tab active" onclick="filterHistory('all',this)">All</button>
+        <button class="tab" onclick="filterHistory('wins',this)">Wins</button>
+        <button class="tab" onclick="filterHistory('losses',this)">Losses</button>
+      </div>
+      <div id="history-summary" class="flex gap-4 text-sm" style="flex-wrap:wrap;"></div>
+    </div>
+    <table class="data-table">
+      <thead><tr>
+        <th>Time</th><th>Asset</th><th>Side</th>
+        <th>Entry</th><th>Exit</th><th>P&L</th><th>Status</th>
+      </tr></thead>
+      <tbody id="history-tbody">
+        <tr><td colspan="7" class="text-center text-muted" style="padding:24px;">No trades</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- STRATEGY -->
+  <div id="tpl-strategy">
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title mb-3">Entry Rules</div>
+        <div class="form-group"><label class="form-label">Time Threshold (sn)</label>
+          <input type="number" class="form-input" id="cfg-time-threshold" value="90"></div>
+        <div class="form-group"><label class="form-label">Min Entry Price</label>
+          <input type="number" class="form-input" id="cfg-min-entry" value="0.75" step="0.01"></div>
+        <div class="form-group"><label class="form-label">Max Entry Price</label>
+          <input type="number" class="form-input" id="cfg-max-entry" value="0.98" step="0.01"></div>
+        <div class="form-group"><label class="form-label">Min Fiyat Hareketi (%)</label>
+          <input type="number" class="form-input" id="cfg-btc-move" value="0.1" step="0.01"></div>
+        <div class="form-group"><label class="form-label">Max Slippage %</label>
+          <input type="number" class="form-input" id="cfg-slippage" value="3" step="0.5"></div>
+      </div>
+      <div class="card">
+        <div class="card-title mb-3">Exit Rules</div>
+        <div class="form-group"><label class="form-label">Target Exit Price</label>
+          <input type="number" class="form-input" id="cfg-target" value="0.90" step="0.01"></div>
+        <div class="form-group"><label class="form-label">Stop Loss Price</label>
+          <input type="number" class="form-input" id="cfg-stoploss" value="0.80" step="0.01"></div>
+        <div class="form-group"><label class="form-label">Order Amount ($)</label>
+          <input type="number" class="form-input" id="cfg-amount" value="2" step="0.5"></div>
+        <div class="form-group"><label class="form-label">Event Trade Limit</label>
+          <input type="number" class="form-input" id="cfg-event-limit" value="1"></div>
+        <div class="form-group"><label class="form-label">Max Open Positions</label>
+          <input type="number" class="form-input" id="cfg-max-pos" value="1"></div>
+        <div class="flex gap-4 mt-3">
+          <label class="flex items-center gap-2">
+            <label class="toggle"><input type="checkbox" id="cfg-force-sell" checked><span class="toggle-slider"></span></label>
+            <span class="text-sm">Force Sell</span>
+          </label>
+          <label class="flex items-center gap-2">
+            <label class="toggle"><input type="checkbox" id="cfg-auto-claim" checked><span class="toggle-slider"></span></label>
+            <span class="text-sm">Auto Claim</span>
+          </label>
+        </div>
+        <button class="btn btn-primary w-full mt-4" onclick="saveStrategy()">Save Strategy</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SETTINGS -->
+  <div id="tpl-settings">
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title mb-3">General Settings</div>
+        <div class="form-group"><label class="form-label">Trading Mode</label>
+          <select class="form-input" id="cfg-mode">
+            <option value="PAPER">PAPER (Simulated)</option>
+            <option value="LIVE">LIVE (Real Money)</option>
+          </select></div>
+        <div class="form-group"><label class="form-label">Fiyat Kaynağı</label>
+          <select class="form-input" id="cfg-btc-source">
+            <option value="POLYMARKET" selected>Polymarket WebSocket</option>
+          </select></div>
+        <div class="form-group"><label class="form-label">Server Port</label>
+          <input type="number" class="form-input" id="cfg-port" value="8002"></div>
+        <label class="flex items-center gap-2 mt-2">
+          <label class="toggle"><input type="checkbox" id="cfg-auto-start"><span class="toggle-slider"></span></label>
+          <span class="text-sm">Auto-start bot on launch</span>
+        </label>
+        <button class="btn btn-primary w-full mt-4" onclick="saveSettings()">Save Settings</button>
+      </div>
+      <div class="card">
+        <div class="card-title mb-3">Bağlantı Durumu</div>
+        <div class="connection-grid">
+          <div class="connection-item"><span class="status-dot offline" id="set-conn-clob"></span><span>CLOB WS API</span></div>
+          <div class="connection-item"><span class="status-dot offline" id="set-conn-btc"></span><span>Price Feed</span></div>
+          <div class="connection-item"><span class="status-dot offline" id="set-conn-user"></span><span>Relayer API</span></div>
+          <div class="connection-item"><span class="status-dot offline" id="set-conn-gamma"></span><span>Gamma API</span></div>
+        </div>
+        <div class="card-title mb-3 mt-4">System Info</div>
+        <div class="status-row"><span class="status-label">Version</span><span class="status-value">v1.3.0</span></div>
+        <div class="status-row"><span class="status-label">Uptime</span><span class="status-value" id="set-uptime">--</span></div>
+        <div class="status-row"><span class="status-label">WS Clients</span><span class="status-value" id="set-ws-clients">0</span></div>
+        <div class="status-row"><span class="status-label">Assets Tracked</span><span class="status-value" id="set-assets">8</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- WALLET -->
+  <div id="tpl-wallet">
+    <div style="max-width:640px;">
+
+      <!-- Durum Göstergesi -->
+      <div style="display:flex;align-items:center;gap:10px;padding:11px 16px;border-radius:var(--radius-md);background:var(--bg-card);border:1px solid var(--border-primary);margin-bottom:14px;">
+        <span id="wallet-status-dot" style="width:11px;height:11px;border-radius:50%;background:var(--accent-red);flex-shrink:0;box-shadow:0 0 5px rgba(255,77,106,0.5);"></span>
+        <span id="wallet-status" style="font-size:12px;font-weight:600;color:var(--text-muted);">⚠️ API anahtarları girilmemiş — bot başlatılamaz</span>
+      </div>
+
+      <!-- Güvenlik Uyarısı -->
+      <div style="background:rgba(255,77,106,0.07);border:1px solid rgba(255,77,106,0.3);border-radius:var(--radius-md);padding:12px 16px;margin-bottom:12px;">
+        <div style="font-size:12px;font-weight:700;color:var(--accent-red);margin-bottom:7px;">🔒 GÜVENLİK UYARISI — Dikkatle Okuyun</div>
+        <ul style="margin:0;padding-left:16px;font-size:11px;color:var(--text-muted);line-height:2;">
+          <li>Bu anahtarlar <strong style="color:var(--text-secondary);">.env dosyasında yerel olarak</strong> saklanır, sunucuya gönderilmez</li>
+          <li>Özel anahtarlarınızı <strong style="color:var(--accent-red);">asla</strong> başkasıyla paylaşmayın, ekran görüntüsü almayın</li>
+          <li>Anahtarlar hiçbir log dosyasına veya terminale yazdırılmaz</li>
+          <li>API anahtarı sızdığını düşünüyorsanız <strong style="color:var(--accent-yellow);">hemen yenileyin:</strong> polymarket.com/settings/api</li>
+          <li>Bu bot yalnızca sizin bilgisayarınızda çalışır, anahtarlar internet üzerinden iletilmez</li>
+        </ul>
+      </div>
+
+      <!-- Nereden Alınır -->
+      <div style="background:rgba(123,97,255,0.07);border:1px solid rgba(123,97,255,0.25);border-radius:var(--radius-md);padding:12px 16px;margin-bottom:18px;">
+        <div style="font-size:12px;font-weight:700;color:var(--accent-purple);margin-bottom:6px;">ℹ️ API Anahtarlarını Nasıl Alırım?</div>
+        <div style="font-size:11px;color:var(--text-muted);line-height:1.8;">
+          1. <strong style="color:var(--text-secondary);">polymarket.com</strong>'a giriş yapın<br>
+          2. Sağ üst → Profil → <strong style="color:var(--accent-purple);">Settings → API</strong> bölümüne gidin<br>
+          3. <strong style="color:var(--text-secondary);">"Create API Key"</strong> butonuna tıklayın<br>
+          4. API Key, Secret ve Passphrase bilgilerini bir yere not alın (yalnızca bir kez gösterilir)<br>
+          5. Private Key için: MetaMask → Hesap → <strong style="color:var(--text-secondary);">Export Private Key</strong>
+        </div>
+      </div>
+
+      <!-- Form Alanları -->
+      <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:18px;">
+
+        <!-- Private Key -->
+        <div style="background:var(--bg-card);border:1px solid var(--border-primary);border-radius:var(--radius-md);padding:14px 16px;">
+          <div style="font-size:12px;font-weight:700;margin-bottom:3px;">🏦 EVM Özel Anahtar <span style="color:var(--accent-red);font-size:10px;">ZORUNLU</span></div>
+          <div style="font-size:10px;color:var(--text-muted);margin-bottom:8px;line-height:1.6;">
+            Polymarket hesabınıza bağlı Ethereum cüzdanının özel anahtarı. İşlem imzalamak için kullanılır.
+            <span style="color:var(--accent-yellow);"> MetaMask → Hesap → Export Private Key</span>
+          </div>
+          <div style="position:relative;">
+            <input type="password" class="form-input" id="cfg-pk" placeholder="Örn: 0xabc123..." style="width:100%;padding-right:40px;box-sizing:border-box;">
+            <button onclick="toggleKeyVisibility('cfg-pk')" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:13px;padding:2px 4px;">👁</button>
+          </div>
+        </div>
+
+        <!-- API Key -->
+        <div style="background:var(--bg-card);border:1px solid var(--border-primary);border-radius:var(--radius-md);padding:14px 16px;">
+          <div style="font-size:12px;font-weight:700;margin-bottom:3px;">🔐 API Anahtarı (API Key) <span style="color:var(--accent-red);font-size:10px;">ZORUNLU</span></div>
+          <div style="font-size:10px;color:var(--text-muted);margin-bottom:8px;line-height:1.6;">
+            Polymarket CLOB API erişim anahtarı. <code style="background:rgba(255,255,255,0.06);padding:1px 4px;border-radius:2px;">pk_live_...</code> formatında başlar.
+          </div>
+          <div style="position:relative;">
+            <input type="password" class="form-input" id="cfg-apikey" placeholder="Örn: pk_live_xxxxxxxxxxxxxxxx" style="width:100%;padding-right:40px;box-sizing:border-box;">
+            <button onclick="toggleKeyVisibility('cfg-apikey')" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:13px;padding:2px 4px;">👁</button>
+          </div>
+        </div>
+
+        <!-- Secret + Passphrase side by side -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+          <div style="background:var(--bg-card);border:1px solid var(--border-primary);border-radius:var(--radius-md);padding:14px 16px;">
+            <div style="font-size:12px;font-weight:700;margin-bottom:3px;">🛡️ Secret <span style="color:var(--accent-red);font-size:10px;">ZORUNLU</span></div>
+            <div style="font-size:10px;color:var(--text-muted);margin-bottom:8px;">API oluştururken verilen gizli anahtar. Yalnızca bir kez gösterilir.</div>
+            <div style="position:relative;">
+              <input type="password" class="form-input" id="cfg-secret" placeholder="Örn: xxxxxxxx..." style="width:100%;padding-right:36px;box-sizing:border-box;">
+              <button onclick="toggleKeyVisibility('cfg-secret')" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:12px;padding:2px;">👁</button>
+            </div>
+          </div>
+          <div style="background:var(--bg-card);border:1px solid var(--border-primary);border-radius:var(--radius-md);padding:14px 16px;">
+            <div style="font-size:12px;font-weight:700;margin-bottom:3px;">🗝️ Passphrase <span style="color:var(--accent-red);font-size:10px;">ZORUNLU</span></div>
+            <div style="font-size:10px;color:var(--text-muted);margin-bottom:8px;">API imzalama parolası. Oluştururken belirlediğiniz veya atanan parola.</div>
+            <div style="position:relative;">
+              <input type="password" class="form-input" id="cfg-passphrase" placeholder="Örn: myPassphrase" style="width:100%;padding-right:36px;box-sizing:border-box;">
+              <button onclick="toggleKeyVisibility('cfg-passphrase')" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:12px;padding:2px;">👁</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Funder Address -->
+        <div style="background:var(--bg-card);border:1px solid var(--border-primary);border-radius:var(--radius-md);padding:14px 16px;">
+          <div style="font-size:12px;font-weight:700;margin-bottom:3px;">💳 Funder Adresi <span style="color:var(--text-muted);font-size:10px;">OPSİYONEL</span></div>
+          <div style="font-size:10px;color:var(--text-muted);margin-bottom:8px;line-height:1.6;">
+            İşlemleri finanse eden EVM cüzdanının <strong>genel adresi</strong> (0x...). MetaMask hesap adresiniz veya Polymarket profil adresiniz. Farklı bir funder cüzdanı kullanmıyorsanız boş bırakabilirsiniz.
+          </div>
+          <input type="text" class="form-input" id="cfg-funder" placeholder="Örn: 0xAbCd1234...7890" style="width:100%;box-sizing:border-box;">
+        </div>
+      </div>
+
+      <!-- Butonlar -->
+      <div style="display:flex;gap:10px;margin-bottom:8px;">
+        <button onclick="saveWallet()" style="flex:1;padding:10px 16px;border-radius:var(--radius-sm);border:none;background:var(--accent-green);color:#000;font-size:13px;font-weight:700;cursor:pointer;">
+          💾 Kaydet &amp; Etkinleştir
+        </button>
+        <button onclick="testWalletConnection()" style="padding:10px 16px;border-radius:var(--radius-sm);border:1px solid var(--accent-purple);background:rgba(123,97,255,0.1);color:var(--accent-purple);font-size:13px;font-weight:600;cursor:pointer;">
+          🔌 Test Et
+        </button>
+        <button onclick="if(confirm('Tüm cüzdan bilgileri silinecek, emin misiniz?')){['cfg-pk','cfg-apikey','cfg-secret','cfg-passphrase','cfg-funder'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});document.getElementById('wallet-status').textContent='Temizlendi.';}" style="padding:10px 14px;border-radius:var(--radius-sm);border:1px solid var(--border-primary);background:transparent;color:var(--text-muted);font-size:12px;cursor:pointer;">
+          🗑️ Temizle
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- LOGS -->
+  <div id="tpl-logs">
+    <div class="card" style="height:calc(100vh - 200px);">
+      <div class="card-header">
+        <span class="card-title">Aktivite Kaydı</span>
+        <button class="btn btn-sm" onclick="clearLogs()">Temizle</button>
+      </div>
+      <div id="log-container" style="height:calc(100% - 50px);overflow-y:auto;font-family:var(--font-mono);font-size:12px;padding:10px;background:var(--bg-primary);border-radius:var(--radius-sm);"></div>
+    </div>
+  </div>
+</div>
+
+<script src="/js/app.js"></script>
+</body>
+</html>

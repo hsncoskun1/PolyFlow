@@ -1,0 +1,255 @@
+# POLYFLOW - Version History
+
+---
+
+## v1.0.0 — 2026-03-29 (İlk Sürüm)
+
+### Yeni Özellikler
+- **Proje kurulumu:** D:/POLYFLOW/ klasör yapısı oluşturuldu
+- **Backend:** FastAPI + asyncio sunucusu, port 8002
+- **WebSocket:** 300ms aralıkla state broadcast; ping/pong sağlık kontrolü
+- **Demo Simülasyon:** Gerçekçi BTC fiyat dalgası (sinüs + random yürüyüş), her saniye tick
+- **Aktif Event:** Her 5 dakikada otomatik yeni event oluşturma + 2 upcoming event
+- **Geri Sayım:** 300sn'den geriye sayan, kural motoru ile entegre
+- **Strateji Motoru:** 6 kural (Time, Price, BTC Move, Slippage, Event Limit, Max Pos)
+- **Pozisyon Simülasyonu:** Entry/Exit/Stop-Loss/Force-Sell otomatik döngüsü (PAPER)
+- **Trade Geçmişi:** 12 rastgele başlangıç trade'i (win/loss karışık)
+- **Polymarket Tasarımı:**
+  - Koyu tema (#0d0d0f arka plan, #7b61ff mor, #00d26a yeşil, #ff4d6a kırmızı)
+  - Inter + JetBrains Mono fontları
+  - Animasyonlu toggle switch, pipeline adımları, event kartları
+  - Geri sayım progress bar (renk: mor → sarı → kırmızı)
+  - Flash animasyonu (BTC fiyat değişiminde yeşil/kırmızı)
+  - Toast bildirimleri, pozisyon ilerleme çubuğu
+
+### Sekmeler (8 adet)
+| Sekme | İçerik |
+|-------|--------|
+| Dashboard | BTC fiyat, P&L, Win Rate, Balance, Aktif Event, Countdown, Pipeline, Market Prices, Open Positions |
+| Events | 3 event kartı (1 LIVE + 2 upcoming), tab filtresi |
+| Positions | Tablo, Close butonu, status badge |
+| Trade History | 12 trade, Wins/Losses filtresi, özet bar |
+| Strategy Rules | Entry + Exit kuralları formu, Force Sell / Auto Claim toggle |
+| Settings | Mode, BTC Source, Port, Auto-start; Connection Status; System Info (uptime, WS clients) |
+| Wallet | Şifreli form (güvenlik: tüm key'ler DISABLED_) |
+| Logs | Renkli activity log (INFO/SUCCESS/WARN/ERROR), Clear butonu |
+
+### Güvenlik
+- `.env` dosyasındaki tüm Polymarket key'leri `DISABLED_` prefix ile devre dışı
+- Bot gerçek API çağrısı yapamaz (sadece PAPER simülasyonu aktif)
+
+### Teknik Yapı
+```
+POLYFLOW/
+├── backend/
+│   ├── main.py          — FastAPI + simülasyon döngüsü (~220 satır)
+│   └── config.py        — Ayar yönetimi (.env + settings.json)
+├── frontend/
+│   ├── index.html       — 8 sayfalı SPA
+│   ├── css/polyflow.css — Polymarket temalı CSS sistemi (~870 satır)
+│   └── js/app.js        — Dashboard mantığı (~620 satır)
+├── .env                 — Key'ler DISABLED (güvenli)
+├── settings.json        — Strateji ayarları
+└── VERSIONS.md          — Bu dosya
+```
+
+---
+
+## OTBA Raporu v1.0.0
+
+### Bağlı ve Çalışan Elementler ✅
+| Element | Endpoint / Fonksiyon | Durum |
+|---------|---------------------|-------|
+| Bot Start/Stop butonu | `POST /api/bot/start` + `/stop` | ✅ |
+| PAPER/LIVE toggle | `POST /api/settings {mode}` | ✅ |
+| Strategy Rules formu → Save | `POST /api/settings` (tüm alanlar) | ✅ |
+| Settings formu → Save | `POST /api/settings` | ✅ |
+| Close Position | `POST /api/positions/{id}/close` | ✅ |
+| WS state broadcast (300ms) | `/ws` → `broadcast_loop()` | ✅ |
+| BTC fiyat simülasyonu | `simulation_tick()` her 1sn | ✅ |
+| Countdown geri sayım | `app_state.countdown` → JS `updateCountdown()` | ✅ |
+| Pipeline kurallar rengi | `app_state.rules` → `updatePipeline()` | ✅ |
+| Uptime sayacı | `startUptimeCounter()` (JS) | ✅ |
+| Toast bildirimleri | `showToast()` | ✅ |
+| Log sistemi | `addLog()` + `/api/logs` | ✅ |
+| BTC flash animasyon | `flashEl()` fiyat değişiminde | ✅ |
+| Win rate hesaplama | JS `updateStats()` | ✅ |
+| Sidebar P&L rengi | pozitif=yeşil, negatif=kırmızı | ✅ |
+| History özet bar | `history-summary` → `updateHistoryPage()` | ✅ |
+| Slippage gösterge rengi | yeşil < %2, sarı < %3, kırmızı ≥ %3 | ✅ |
+
+### Bağlı Olmayan Elementler ⚠️ (v1.1 planı)
+| Element | Mevcut Durum | Plan |
+|---------|-------------|------|
+| UP/DOWN tıklama (aktif event) | Sadece log yazıyor | v1.1: Manuel trade modal |
+| Wallet Save butonu | Demo uyarısı, backend bağlantısı yok | v1.1: .env yazma endpoint |
+| Events → Resolved tab | Filter logic eksik | v1.1 |
+| History → CSV/Export | Yok | v1.2 |
+| Claim/Redeem sayfası | Yok | v1.2 |
+| Gerçek Polymarket API | Simülasyon (sahte veri) | v1.1 |
+| Gerçek BTC WebSocket | Simülasyon | v1.1 |
+| SQLite veritabanı | Yok (bellekte) | v1.1 |
+
+### Bağlantı Haritası
+```
+[Browser] ←WS 300ms→ [FastAPI /ws]
+                           ↕
+                    [app_state dict]
+                           ↕
+                   [simulation_tick()]
+                    (BTC, countdown,
+                     rules, positions,
+                     events, trades)
+
+[Browser] ←REST→ [FastAPI /api/*]
+  /api/status      → tüm state snapshot
+  /api/settings    → GET ayarları yükle
+  POST /api/settings → ayar kaydet + state güncelle
+  POST /api/bot/start|stop → bot toggle
+  POST /api/positions/{id}/close → pozisyon kapat
+```
+
+---
+
+---
+
+## v1.1.0 — 2026-03-29 (Multi-Asset Watchlist)
+
+### Yeni Özellikler
+- **8 Asset Simülasyonu:** BTC, ETH, SOL, XRP, DOGE, BNB, MATIC, LINK — bağımsız fiyat dalgaları
+- **3-Panel Watchlist:** Sol panel (asset listesi) + sağ panel (seçili asset detayı)
+- **Pin Sistemi:** Bot yalnızca takipli (pinned) asset'ları izler; WS ile toggle_pin
+- **REST Fallback:** Sayfa açılışında `/api/status` fetch → WS bağlantısı beklenmez
+- **WS Scoping Fix:** `ws_clients -= dead` → `ws_clients.difference_update(dead)` (UnboundLocalError düzeltildi)
+- **Bağımsız Countdown:** Her asset kendi 5dk penceresini izler
+- **Faz Yönetimi:** entry → position → exit per-asset (sadece pinned + bot running)
+- **Demo Tarihçe:** 18 rastgele PAPER trade başlangıç verisi
+
+### Teknik Değişiklikler
+- `ASSETS` dict: 8 koin, renk, ikon, base_price, volatility
+- `_asset_countdowns / _asset_phases / _asset_market` per-asset sim dicts
+- `renderAssetRow()` + `updateDetailPanel()` watchlist JS fonksiyonları
+- `.watchlist-panel` (340px) + `.detail-panel` (flex:1) CSS layout
+
+---
+
+## OTBA Raporu v1.1.0
+
+### Bağlı ve Çalışan Elementler ✅
+| Element | Endpoint / Fonksiyon | Durum |
+|---------|---------------------|-------|
+| 8 asset simülasyonu | `simulation_tick()` per-asset | ✅ |
+| Pin sistemi | WS `toggle_pin` + `POST /api/assets/{sym}/pin` | ✅ |
+| Asset seçimi | WS `select_asset` + `POST /api/assets/{sym}/select` | ✅ |
+| 3-panel layout | `.watchlist-panel` + `.detail-panel` | ✅ |
+| Fiyat flash animasyonu | `_prevPrices` diff → `flash-green/red` | ✅ |
+| REST fallback polling | `fetch('/api/status')` her 2sn (WS kopuksa) | ✅ |
+
+---
+
+## v1.2.0 — 2026-03-29 (Accordion Event Layout + Notification Bell)
+
+### Yeni Özellikler
+- **Accordion Event List:** 8 asset kartı; tıklayınca genişler, diğerleri sıkışır
+- **3-Kolon Expand Detayı:** Geri Sayım + Market Prices + Manuel Order (veya Pozisyon)
+- **Asset Chip Filtresi:** "All" + BTC/ETH/SOL/... chip butonları → tek asset görünümü
+- **Toolbar Stats Bar:** Balance, P&L, Win Rate, Trades — üst toolbar'da
+- **Notification Bell 🔔:** Header'da çan ikonu, badge (okunmamış sayısı), dropdown liste
+  - Demo bildirimler: BTC tracking başladı, SOL slippage uyarısı, ETH event açıldı
+  - "Tümünü Oku" butonu, dışarı tıklayınca kapanır
+- **Mini Pipeline Dots:** Her kapalı kartta 6 renkli nokta (pass/fail/waiting)
+- **TRACKING / POS / READY badge:** Kapalı kartlarda inline durum göstergesi
+- **Anlık Geri Sayım Barı:** Genişlemiş kartın üst kenarında renkli progress çubuğu
+- **Polymarket Analizi Uygulandı:** polymarket.com/crypto/5M + event detail page yapısı referans alındı
+
+### Teknik Değişiklikler
+- `state.expandedAsset` — hangisi açık
+- `state.chipFilter` — asset filtresi
+- `state.notifications[]` + `state.notifOpen` — bildirim sistemi
+- `renderEventsList()` — tüm accordion kartlarını render eder
+- `renderEventCard(sym)` — tek kapalı/açık kart HTML
+- `renderEventBody(sym)` — genişlemiş 3-kolon detay HTML
+- `expandEvent(sym)` — toggle expand
+- `filterEvents(sym)` — chip filtresi
+- `pushNotification(level, msg)` — bell badge günceller
+- CSS: `.eac`, `.eac-hdr`, `.eac-body`, `.eac-body-grid`, `.pd` (mini dots), `.badge-*`, `.notif-*`
+
+---
+
+## OTBA Raporu v1.2.0
+
+### Bağlı ve Çalışan Elementler ✅
+| Element | Endpoint / Fonksiyon | Durum |
+|---------|---------------------|-------|
+| Accordion expand/collapse | `expandEvent(sym)` → `renderEventsList()` | ✅ |
+| Asset chip filtresi | `filterEvents(sym)` | ✅ |
+| Toolbar stats (Balance, P&L, Win Rate, Trades) | `renderEventsList()` içinde | ✅ |
+| Mini pipeline dots | `renderEventCard()` → `.pd.pass/fail/waiting` | ✅ |
+| Notification bell dropdown | `toggleNotifDropdown()` + `pushNotification()` | ✅ |
+| Badge sayacı (okunmamış) | `updateNotifBadge()` | ✅ |
+| Dışarı tıklayınca kapat | `document.addEventListener('click', ...)` | ✅ |
+| TRACKING/POS/READY badge | pinned + has_position + allPass kurallar | ✅ |
+| Geri sayım color-coding | cd≤20=kırmızı, cd≤60=sarı, diğer=mor | ✅ |
+| Countdown bar (genişlemiş kart) | `barPct` = (300-cd)/300*100 | ✅ |
+| Manuel order (genişlemiş kart) | `placeOrder(sym, side)` | ✅ |
+| Pozisyon kartı (genişlemiş, açıksa) | `closePosition(pos.id)` | ✅ |
+| Live fiyat flash animasyonu | `_prevPrices` diff → `flash-green/red` | ✅ |
+| Cache-bust hard refresh | Ctrl+Shift+R (eski JS cache sorunu çözüldü) | ✅ |
+
+### Bağlantı Haritası v1.2
+```
+[Browser] ←WS 300ms→ [FastAPI /ws]
+                           ↕
+                    [app_state dict]
+                           ↕
+              [simulation_tick() per-asset]
+              (price, countdown, market,
+               rules, phase, event, pinned)
+
+Accordion Flow:
+  click eac-hdr → expandEvent(sym)
+    → state.expandedAsset = sym
+    → wsSend(select_asset)
+    → renderEventsList()
+      → renderEventCard(sym)     [header row]
+        → renderEventBody(sym)   [expanded body]
+          [Col1: countdown]
+          [Col2: market prices]
+          [Col3: order/position]
+          [Pipeline: 6 rules]
+
+Notification Flow:
+  addLog(level, msg) → pushNotification()
+    → state.notifications.unshift()
+    → updateNotifBadge()
+  toggleNotifDropdown()
+    → renderNotifications()
+```
+
+---
+
+## Sonraki Versiyon Planı
+
+### v1.1.0 (Tamamlandı — bkz. yukarıda)
+- [ ] Gerçek Polymarket Gamma API → BTC 5m event çekme
+- [ ] Binance WebSocket → gerçek BTC fiyatı
+- [ ] CLOB WebSocket → UP/DOWN token fiyatları
+- [ ] SQLite veritabanı (trades, events tabloları)
+- [ ] Manuel trade modal (UP/DOWN seç → miktar → gönder)
+- [ ] Wallet backend endpoint (güvenli .env yazma)
+- [ ] Events → Resolved tab mantığı
+- [ ] RAR yedeği: POLYFLOW_v1.1.0
+
+### v1.2.0
+- [ ] Gerçek PAPER order execution (py-clob-client, simüle imza)
+- [ ] Claim/Redeem sayfası
+- [ ] Trade History CSV export
+- [ ] Strategy şablonları (kaydet/yükle)
+- [ ] Çoklu event takibi (BTC + ETH + SOL)
+
+### v1.3.0 (LIVE Trading)
+- [ ] Gerçek order execution (FOK entry, GTC exit)
+- [ ] Wallet key aktivasyonu (.env DISABLED_ kaldır)
+- [ ] Gasless Relayer v2 entegrasyonu (auto-claim)
+- [ ] Sell retry mekanizması
+- [ ] Force sell (resolution öncesi)
