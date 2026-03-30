@@ -1,4 +1,8 @@
-"""POLYFLOW - Main FastAPI Server v1.4 (CLOB WebSocket + Gamma Market Scan + PTB)"""
+"""POLYFLOW - Main FastAPI Server v1.5 (Moduler Yapi + SQLite + RTDS)"""
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))  # POLYFLOW/ dizinini path'e ekle
+
 import asyncio
 import json
 import logging
@@ -111,27 +115,15 @@ app_state = {
 }
 
 # ─── HELPERS ──────────────────────────────────────────────────────────────────
+from backend.strategy.engine import evaluate_rules as _evaluate_rules
+
 def _make_asset_rules(sym: str, cd: int = 150, mp: dict = None) -> dict:
-    """Kural durumlarini hesapla. Tum veri Polymarket'ten."""
+    """Kural durumlarini hesapla — moduler engine'e yonlendirir."""
     if mp is None:
         mp = _asset_market.get(sym, {"up_ask": 0.5, "slippage_pct": 1.2})
-    up_ask = mp.get("up_ask", 0.5)
-    price_ok = 0.75 <= up_ask <= 0.98
-    time_ok = 20 < cd < 120
-    # btc_move: UP/DOWN farkina bak (Polymarket verisi)
-    down_ask = mp.get("down_ask", 0.5)
-    delta = abs(up_ask - 0.5)  # 0.5'ten sapma = hareket gostergesi
-    btc_move_ok = delta >= 0.02  # %2'den fazla sapma
-    slip_ok = mp.get("slippage_pct", 0) < 3.0
-    has_pos = any(p.get("asset") == sym for p in app_state["positions"])
-    return {
-        "time":          "pass" if time_ok  else ("fail" if cd <= 20 else "waiting"),
-        "price":         "pass" if price_ok else "fail",
-        "btc_move":      "pass" if btc_move_ok else "waiting",
-        "slippage":      "pass" if slip_ok else "fail",
-        "event_limit":   "fail" if has_pos else "pass",
-        "max_positions": "fail" if len(app_state["positions"]) >= 1 else "pass",
-    }
+    from backend.config import load_settings
+    settings = load_settings()
+    return _evaluate_rules(sym, cd, mp, app_state["positions"], settings)
 
 
 # ─── LOG BUFFER ───────────────────────────────────────────────────────────────
@@ -1227,11 +1219,31 @@ async def select_asset(sym: str):
 async def get_positions():
     return {"positions": app_state["positions"]}
 
+@app.get("/api/positions/history")
+async def get_positions_history():
+    """DB'den tum pozisyonlari getir (acik + kapali)."""
+    from backend.storage.db import get_all_positions
+    return {"positions": get_all_positions()}
+
 @app.post("/api/positions/{pos_id}/close")
 async def close_position(pos_id: str):
     app_state["positions"] = [p for p in app_state["positions"] if p["id"] != pos_id]
-    addlog("warn", f"Position {pos_id} manually closed")
+    from backend.storage.db import close_position as db_close
+    db_close(pos_id, 0, "MANUAL")
+    addlog("warn", f"Pozisyon {pos_id} manuel kapatildi")
     return {"ok": True}
+
+@app.get("/api/trades")
+async def get_trades():
+    """DB'den trade gecmisini getir."""
+    from backend.storage.db import get_trades
+    return {"trades": get_trades()}
+
+@app.get("/api/stats/daily")
+async def get_daily_stats():
+    """Gunluk istatistikler."""
+    from backend.storage.db import get_daily_trade_count, get_daily_pnl
+    return {"daily_trades": get_daily_trade_count(), "daily_pnl": get_daily_pnl()}
 
 @app.get("/api/markets/matched")
 async def get_matched_markets():
