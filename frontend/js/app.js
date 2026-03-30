@@ -165,23 +165,57 @@ function onCardDrop(sym, e) {
   renderEventsList();
 }
 
+// ─── TF etiket cevirisi ────────────
+const TF_LABELS = {
+  '1M':'1DK','2M':'2DK','3M':'3DK','5M':'5DK','10M':'10DK','15M':'15DK','30M':'30DK',
+  '1H':'1SA','2H':'2SA','3H':'3SA','4H':'4SA','6H':'6SA','8H':'8SA','12H':'12SA',
+  '1D':'1G','2D':'2G',
+};
+
+// ─── Dinamik TF sekmeleri olustur ────────────
+let _tfTabsBuilt = false;
+function buildTfTabs() {
+  const container = document.getElementById('tf-tabs');
+  if (!container) return;
+  // Asset key'lerden mevcut TF'leri cikar
+  const tfsFromAssets = new Set();
+  Object.keys(state.assets).forEach(k => {
+    const tf = k.includes('_') ? k.split('_').slice(1).join('_') : '5M';
+    tfsFromAssets.add(tf);
+  });
+  // TF_SECONDS sirasina gore sirala (kucukten buyuge)
+  const tfOrder = {'1M':60,'2M':120,'3M':180,'5M':300,'10M':600,'15M':900,'30M':1800,
+    '1H':3600,'2H':7200,'3H':10800,'4H':14400,'6H':21600,'8H':28800,'12H':43200,'1D':86400};
+  const sorted = [...tfsFromAssets].sort((a,b) => (tfOrder[a]||99999) - (tfOrder[b]||99999));
+
+  let html = '';
+  html += `<button class="tf-tab" id="tf-btn-PINNED" onclick="setTimeframe('PINNED')">Pinli</button>`;
+  html += `<button class="tf-tab tf-tab-all" id="tf-btn-ALL" onclick="setTimeframe('ALL')">Tumu</button>`;
+  sorted.forEach(tf => {
+    const label = TF_LABELS[tf] || tf;
+    const active = state.timeframe === tf ? ' active' : '';
+    html += `<button class="tf-tab${active}" id="tf-btn-${tf}" onclick="setTimeframe('${tf}')">${label}</button>`;
+  });
+  container.innerHTML = html;
+  _tfTabsBuilt = true;
+}
+
 // ─── Timeframe / Market Filter ────────────
 function setTimeframe(tf) {
   state.timeframe = tf;
   state.showAllMarkets = (tf === 'ALL');
-  // Update tab UI
-  ['PINNED','ALL','5M','15M','1H','4H','1D'].forEach(t => {
-    const btn = document.getElementById(`tf-btn-${t}`);
-    if (btn) btn.classList.toggle('active', t === tf);
+  // Update tab UI — tum butonlari tara
+  document.querySelectorAll('.tf-tab').forEach(btn => {
+    const btnTf = btn.id.replace('tf-btn-', '');
+    btn.classList.toggle('active', btnTf === tf);
   });
-  // Reset chip filter when switching to all markets
   if (state.showAllMarkets) {
     state.chipFilter = 'ALL';
-    _chipsBuilt = false; // rebuild chips with all assets
+    _chipsBuilt = false;
   } else {
-    _chipsBuilt = false; // rebuild chips with pinned assets
+    _chipsBuilt = false;
   }
-  _lastRenderKey = ''; // force full re-render
+  _lastRenderKey = '';
   renderEventsList();
 }
 
@@ -259,6 +293,12 @@ function updateUI() {
   updateSidebar();
   updateConnectionUI();
   updateNotifBadge();
+
+  // TF sekmelerini dinamik olustur (ilk seferde veya asset degisince)
+  if (!_tfTabsBuilt || Object.keys(state.assets).length !== state._lastAssetCount) {
+    buildTfTabs();
+    state._lastAssetCount = Object.keys(state.assets).length;
+  }
 
   // Events list always renders in background
   renderEventsList();

@@ -315,9 +315,17 @@ def _detect_tf(slug: str, question: str) -> str:
     if "15 min" in q:                   return "15M"
     return "5M"
 
-# Timeframe → window seconds
-TF_SECONDS = {"5M": 300, "15M": 900, "1H": 3600, "4H": 14400, "1D": 86400}
-ACTIVE_TIMEFRAMES = ["5M", "15M", "1H", "4H", "1D"]
+# Timeframe → window seconds (bilinen TF'ler — yenileri otomatik eklenir)
+TF_SECONDS = {"5M": 300, "15M": 900, "1H": 3600, "4H": 14400, "1D": 86400,
+              "1M": 60, "2M": 120, "3M": 180, "10M": 600, "30M": 1800,
+              "2H": 7200, "3H": 10800, "6H": 21600, "8H": 28800, "12H": 43200}
+
+# Dinamik TF listesi — discovery_scan tarafindan otomatik guncellenir
+_discovered_timeframes: set[str] = {"5M", "15M", "1H", "4H", "1D"}  # baslangic
+
+def get_active_timeframes() -> list[str]:
+    """Kesfedilen tum TF'leri dondur."""
+    return sorted(_discovered_timeframes, key=lambda t: TF_SECONDS.get(t, 999999))
 
 # Derived from COIN_REGISTRY (auto-updated when new coins discovered)
 def _slug_prefix():  return {sym: info["slug_prefix"] for sym, info in COIN_REGISTRY.items()}
@@ -446,7 +454,7 @@ async def scan_slug_based():
     try:
         async with httpx.AsyncClient(timeout=12.0) as client:
             for sym in ASSET_SEARCH_TERMS:
-                for tf in ACTIVE_TIMEFRAMES:
+                for tf in get_active_timeframes():
                     key = f"{sym}_{tf}"
                     try:
                         candidates = _calc_candidate_slugs(sym, tf)
@@ -498,10 +506,11 @@ _AUTO_COLORS = ["#e74c3c","#3498db","#2ecc71","#e67e22","#9b59b6","#1abc9c","#f3
 _AUTO_ICONS  = ["●","◉","◆","▲","★","◈","⬟","⬡"]
 
 async def discovery_scan():
-    """Broad Gamma scan to discover NEW coins with 'up or down' markets.
-    Runs every ~5 minutes. If a new coin is found, adds it to COIN_REGISTRY."""
-    global ASSET_SEARCH_TERMS, SLUG_PREFIX, SLUG_FULLNAME
-    import re
+    """Broad Gamma scan: yeni coin VE yeni timeframe otomatik kesfeder.
+    - Yeni coin bulursa COIN_REGISTRY'ye ekler
+    - Yeni TF bulursa _discovered_timeframes'e ekler
+    - Frontend'te yeni TF sekmesi otomatik olusur"""
+    global ASSET_SEARCH_TERMS, SLUG_PREFIX, SLUG_FULLNAME, _discovered_timeframes
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(f"{GAMMA_BASE}/markets?active=true&closed=false&limit=500&order=createdAt&ascending=false")
@@ -510,13 +519,13 @@ async def discovery_scan():
             raw = resp.json()
             markets = raw if isinstance(raw, list) else raw.get("markets", [])
 
-        # Bilinen tüm prefix ve fullname'leri topla (1H slug'ları fullname kullanır)
         known_prefixes = set()
         for info in COIN_REGISTRY.values():
             known_prefixes.add(info["slug_prefix"])
             known_prefixes.add(info["slug_fullname"])
             known_prefixes.add(info["name"].lower())
-        new_found = 0
+        new_coins = 0
+        new_tfs = 0
 
         for m in markets:
             q = m.get("question", "")
@@ -524,13 +533,34 @@ async def discovery_scan():
             if "up or down" not in q.lower():
                 continue
 
-            # Extract coin name: "Bitcoin Up or Down..." → "Bitcoin"
+            # ── TF KESFI: slug'dan timeframe tespit et ──
+            tf = _detect_tf(slug, q)
+            if tf not in _discovered_timeframes:
+                # Yeni TF! Window seconds'i hesapla veya TF_SECONDS'ta var mi kontrol et
+                if tf not in TF_SECONDS:
+                    # Bilinmeyen TF — slug'dan window tahmin et
+                    tf_lower = tf.lower()
+                    if tf_lower.endswith('m'):
+                        try: TF_SECONDS[tf] = int(tf_lower[:-1]) * 60
+                        except: TF_SECONDS[tf] = 300
+                    elif tf_lower.endswith('h'):
+                        try: TF_SECONDS[tf] = int(tf_lower[:-1]) * 3600
+                        except: TF_SECONDS[tf] = 3600
+                    elif tf_lower.endswith('d'):
+                        try: TF_SECONDS[tf] = int(tf_lower[:-1]) * 86400
+                        except: TF_SECONDS[tf] = 86400
+                    else:
+                        TF_SECONDS[tf] = 300
+                _discovered_timeframes.add(tf)
+                new_tfs += 1
+                addlog("success", f"Yeni timeframe kesfedildi: {tf} (window={TF_SECONDS.get(tf,0)}sn)")
+
+            # ── COIN KESFI: slug prefix'inden yeni coin ──
             match = re.match(r'^(\w+)\s+[Uu]p or [Dd]own', q)
             if not match:
                 continue
             coin_name = match.group(1)
 
-            # Extract slug prefix
             slug_prefix = ""
             if "-updown-" in slug:
                 slug_prefix = slug.split("-updown-")[0]
@@ -540,8 +570,7 @@ async def discovery_scan():
             if not slug_prefix or slug_prefix in known_prefixes:
                 continue
 
-            # NEW COIN FOUND!
-            sym = coin_name.upper()[:5]  # Max 5 char symbol
+            sym = coin_name.upper()[:5]
             if sym in COIN_REGISTRY:
                 continue
 
@@ -549,31 +578,27 @@ async def discovery_scan():
             COIN_REGISTRY[sym] = {
                 "name": coin_name,
                 "slug_prefix": slug_prefix,
-                "slug_fullname": slug_prefix,  # same for new coins
+                "slug_fullname": slug_prefix,
                 "icon": _AUTO_ICONS[idx],
                 "color": _AUTO_COLORS[idx],
             }
             known_prefixes.add(slug_prefix)
 
-            # Add to ASSETS if not exists
             if sym not in ASSETS:
-                ASSETS[sym] = {
-                    "name": coin_name,
-                    "icon": _AUTO_ICONS[idx],
-                    "color": _AUTO_COLORS[idx],
-                }
+                ASSETS[sym] = {"name": coin_name, "icon": _AUTO_ICONS[idx], "color": _AUTO_COLORS[idx]}
                 _init_single_asset(sym)
 
-            new_found += 1
+            new_coins += 1
             addlog("success", f"Yeni coin kesfedildi: {sym} ({coin_name}) prefix={slug_prefix}")
 
-        if new_found > 0:
-            # Rebuild derived dicts
+        if new_coins > 0:
             ASSET_SEARCH_TERMS = _build_search_terms()
             SLUG_PREFIX.update(_slug_prefix())
             SLUG_FULLNAME.update(_slug_fullname())
             _save_discovered()
-            addlog("info", f"Kesif tamamlandi: {new_found} yeni coin, toplam {len(COIN_REGISTRY)}")
+
+        if new_coins > 0 or new_tfs > 0:
+            addlog("info", f"Kesif: {new_coins} yeni coin, {new_tfs} yeni TF, toplam {len(COIN_REGISTRY)} coin / {len(_discovered_timeframes)} TF")
 
     except Exception as e:
         logger.warning(f"discovery_scan error: {e}")
@@ -1156,6 +1181,12 @@ async def get_matched_markets():
 async def get_coins():
     """Return all known coins from COIN_REGISTRY."""
     return {"coins": COIN_REGISTRY, "active_count": len(ASSET_SEARCH_TERMS)}
+
+@app.get("/api/timeframes")
+async def get_timeframes():
+    """Kesfedilen tum timeframe'leri dondur."""
+    tfs = get_active_timeframes()
+    return {"timeframes": tfs, "count": len(tfs), "tf_seconds": {t: TF_SECONDS.get(t, 0) for t in tfs}}
 
 @app.post("/api/coins/{sym}/add")
 async def add_coin(sym: str, body: dict):
