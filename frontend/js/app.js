@@ -650,7 +650,7 @@ function updateCardsInPlace(keys) {
     }).length;
     const allPass    = passCount === 6;
     const countColor = allPass ? 'all-pass' : passCount >= 4 ? 'waiting' : 'has-fail';
-    const countDiv   = card.querySelector('.eac-hdr-mid .eac-rule-count');
+    const countDiv   = card.querySelector('.eac-hdr-right .eac-rule-count');
     if (countDiv) {
       countDiv.className = `eac-rule-count ${countColor}`;
       const numEl = countDiv.querySelector('.eac-rule-count-num');
@@ -842,7 +842,7 @@ function renderEventCard(key) {
 <div class="eac ${hasPos ? 'has-position' : ''} ${isUntracked ? 'untracked' : ''}" id="eac-${key}" ${dragAttrs}>
   <div class="eac-hdr">
 
-    <!-- SOL: ikon + isim + 5DK + pin -->
+    <!-- SOL: ikon + isim + 5DK + pin + CANLI -->
     <div class="eac-hdr-left">
       <div class="eac-icon" style="background:${a.color}22;color:${a.color};">${a.icon}</div>
       <div class="eac-hdr-text">
@@ -855,6 +855,7 @@ function renderEventCard(key) {
           <button class="pin-btn pin-btn-title ${pinned ? 'pinned' : ''}"
             onclick="event.stopPropagation(); togglePin('${key}')"
             title="${pinned ? 'Takipten çıkar' : 'Takibe al'}">${pinned ? '📌' : '📍'}</button>
+          ${liveBadge}
           ${hasPos ? '<span class="badge-pos">●</span>' : ''}
           ${(allPass && state.botRunning && pinned) ? '<span class="badge-ready">AL</span>' : ''}
         </div>
@@ -866,21 +867,21 @@ function renderEventCard(key) {
       </div>
     </div>
 
-    <!-- ORTA: canli badge + ayar uyarısı + 0/6 sayacı -->
+    <!-- ORTA: sadece ayar uyarısı (varsa), ortalanmış sarı metin -->
     <div class="eac-hdr-mid">
-      ${liveBadge}
-      ${!settingsConfigured ? '<span class="eac-no-settings-warn">Ayar yapmadan işlem açılamaz</span>' : ''}
-      <div class="eac-rule-count ${countColor}" title="Kural durumu">
-        <span class="eac-rule-count-num">${passCount}/6</span>
-      </div>
+      ${!settingsConfigured ? '<span class="eac-no-settings-warn">⚠ Ayar yapmadan işlem açılamaz</span>' : ''}
     </div>
 
-    <!-- SAG: kurallar (her zaman gösterilir) -->
+    <!-- SAG: 0/6 + kurallar (her zaman gösterilir) -->
     <div class="eac-hdr-right">
       ${pos
         ? `<span class="eac-pnl-inline ${(pos.pnl||0)>=0?'pos':'neg'}" title="Acik pozisyon P&L">${(pos.pnl||0)>=0?'+':''}${formatUSD(pos.pnl)}</span><div class="eac-rb-sep"></div>`
         : ''
       }
+      <div class="eac-rule-count ${countColor}" title="Kural durumu">
+        <span class="eac-rule-count-num">${passCount}/6</span>
+      </div>
+      <div class="eac-rb-sep"></div>
       <div class="eac-rb rb-${timeStatus}" data-rb="time" title="Zaman: ${timeMinStr}–${timeMaxStr}">
         <span class="eac-rb-main">${timeMinStr} │ ${cdStr} │ ${timeMaxStr}</span>
         <span class="eac-rb-sub">Min │ Kalan │ Max</span>

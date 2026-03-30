@@ -2744,33 +2744,32 @@ html, body {
 .eac-rule-count-num { font-size: 10px !important; font-weight: 700 !important; white-space: nowrap !important; }
 .eac-rule-count-lbl { font-size: 7px !important; opacity: 0.65 !important; }
 
-/* MIDDLE: canli + uyari + 0/6 */
+/* MIDDLE: sadece ayar uyarısı, esnek genişlikte ortalar */
 .eac-hdr-mid {
   display: flex !important;
   align-items: center !important;
-  gap: 6px !important;
-  flex-shrink: 0 !important;
-  padding: 0 10px !important;
-  min-width: 170px !important;
   justify-content: center !important;
+  flex: 1 !important;
+  padding: 0 16px !important;
+  min-width: 0 !important;
 }
 .eac-no-settings-warn {
   font-size: 9px !important;
   font-weight: 700 !important;
-  color: var(--accent-red) !important;
+  color: var(--accent-yellow) !important;
   white-space: nowrap !important;
-  opacity: 0.9 !important;
-  letter-spacing: 0.2px !important;
-  animation: pulse-red 2s infinite !important;
+  opacity: 0.85 !important;
+  letter-spacing: 0.4px !important;
+  text-align: center !important;
 }
 
 /* RIGHT side */
 .eac-hdr-right {
   display: flex !important;
   align-items: center !important;
-  flex: 1 !important;
+  flex-shrink: 0 !important;
   gap: 0 !important;
-  overflow: hidden !important;
+  overflow: visible !important;
   justify-content: flex-end !important;
 }
 
