@@ -17,6 +17,7 @@ from contextlib import asynccontextmanager
 import httpx
 import websockets
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
@@ -159,6 +160,8 @@ async def simulation_tick():
             asset_states = {}
             now_ts = int(time.time())
             pinned_set = set(app_state["pinned"])
+            # Pozisyon lookuplarını ön hesapla — her event için linear scan yapmamak için
+            open_sym_set = {p.get("asset") for p in app_state["positions"]}
 
             for key, real in list(_market_cache.items()):
                 sym = key.split("_")[0]
@@ -216,7 +219,7 @@ async def simulation_tick():
                     "rules":        rules,
                     "event":        real_event,
                     "pinned":       key in pinned_set,
-                    "has_position": any(p.get("asset") == sym for p in app_state["positions"]),
+                    "has_position": sym in open_sym_set,
                     "settings_configured": settings_configured,
                     "phase":        _asset_phases.get(sym, "entry"),
                     "slug":         real.get("slug", ""),
@@ -277,7 +280,8 @@ async def broadcast_state():
     for client in ws_clients:
         try:
             await client.send_text(payload)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"ws_client kopuk, temizleniyor: {e}")
             dead.add(client)
     ws_clients.difference_update(dead)
 
@@ -1089,20 +1093,20 @@ async def lifespan(app):
     addlog("info", "POLYFLOW v1.7 basladi — Multi-Asset + CLOB WS + Gamma Scan")
     addlog("info", f"Izlenen: {len(ASSETS)} asset: {', '.join(ASSETS.keys())}")
 
-    t1 = asyncio.create_task(broadcast_loop())
-    t2 = asyncio.create_task(simulation_tick())
-    t3 = asyncio.create_task(gamma_scan_loop())
-    t4 = asyncio.create_task(clob_ws_connect())
-    t5 = asyncio.create_task(relayer_health_loop())
-    t6 = asyncio.create_task(_ptb_loop())
-    await start_rtds()  # RTDS WebSocket — canli coin fiyatlari
-    yield
-    t1.cancel()
-    t2.cancel()
-    t3.cancel()
-    t4.cancel()
-    t5.cancel()
-    t6.cancel()
+    tasks = []
+    try:
+        tasks.append(asyncio.create_task(broadcast_loop()))
+        tasks.append(asyncio.create_task(simulation_tick()))
+        tasks.append(asyncio.create_task(gamma_scan_loop()))
+        tasks.append(asyncio.create_task(clob_ws_connect()))
+        tasks.append(asyncio.create_task(relayer_health_loop()))
+        tasks.append(asyncio.create_task(_ptb_loop()))
+        await start_rtds()  # RTDS WebSocket — canli coin fiyatlari
+        yield
+    finally:
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 RELAYER_HEALTH_URL = "https://clob.polymarket.com"
@@ -1210,6 +1214,15 @@ async def relayer_health_loop():
 
 app = FastAPI(title="POLYFLOW", lifespan=lifespan)
 
+# CORS: sadece localhost kaynaklarına izin ver (local bot)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:8002", "http://127.0.0.1:8002", "http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["*"],
+)
+
 
 # ─── WEBSOCKET ────────────────────────────────────────────────────────────────
 @app.websocket("/ws")
@@ -1227,7 +1240,12 @@ async def ws_endpoint(ws: WebSocket):
     try:
         while True:
             raw = await ws.receive_text()
-            msg = json.loads(raw)
+            try:
+                msg = json.loads(raw)
+                if not isinstance(msg, dict):
+                    continue
+            except json.JSONDecodeError:
+                continue
             if msg.get("type") == "ping":
                 await ws.send_text(json.dumps({"type": "pong"}))
             elif msg.get("type") == "select_asset":
@@ -1481,10 +1499,6 @@ async def inject_demo_position():
     addlog("success", "Demo position injected: SOL UP @ 0.520 (PAPER)")
     return {"ok": True, "position": demo_pos}
 
-@app.get("/api/trades")
-async def get_trades():
-    return {"trades": app_state["trade_history"]}
-
 @app.get("/api/logs")
 async def get_logs():
     return {"logs": _log_buffer[:100]}
@@ -1494,15 +1508,24 @@ async def get_wallet():
     cfg = get_wallet_config()
     configured = bool(cfg["private_key"] and cfg["api_key"])
     app_state["wallet_configured"] = configured
+
+    def _mask(val: str, show: int = 4) -> str:
+        """Hassas değerleri maskele: ilk/son show karakter görünür."""
+        if not val:
+            return ""
+        if len(val) <= show * 2:
+            return "*" * len(val)
+        return val[:show] + "****" + val[-show:]
+
     return {
         "configured": configured,
-        "private_key": cfg["private_key"],
-        "api_key": cfg["api_key"],
-        "secret": cfg["secret"],
-        "passphrase": cfg["passphrase"],
-        "funder": cfg["funder"],
-        "sig_type": cfg["sig_type"],
-        "relayer_api_key": cfg.get("relayer_api_key", ""),
+        "private_key": _mask(cfg["private_key"], 6),
+        "api_key":     cfg["api_key"],        # UI'da gösterilmesi gerekirken maskeleme yapılmaz
+        "secret":      _mask(cfg["secret"], 4),
+        "passphrase":  _mask(cfg["passphrase"], 4),
+        "funder":      cfg["funder"],
+        "sig_type":    cfg["sig_type"],
+        "relayer_api_key": _mask(cfg.get("relayer_api_key", ""), 4),
         "relayer_address": cfg.get("relayer_address", ""),
     }
 
