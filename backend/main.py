@@ -793,9 +793,10 @@ async def _ptb_loop():
                     continue
 
                 # Slug degistiyse (yeni event) → eski PTB'yi sifirla, hemen yeni fetch
+                # old_slug yoksa (ilk kez) → slug_changed=True say, hemen fetch yap
                 old_slug = _ptb_slug_map.get(key, "")
-                slug_changed = old_slug and old_slug != slug
-                if slug_changed:
+                slug_changed = (not old_slug) or (old_slug != slug)
+                if slug_changed and old_slug and old_slug != slug:
                     _ptb_locked.pop(key, None)
                     _ptb_cache.pop(key, None)
                     _ptb_slug_map[key] = slug

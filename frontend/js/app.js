@@ -75,11 +75,12 @@ let _symToKeys    = {};    // 'BTC' → ['BTC_5M','BTC_15M',...]
 let _directReady  = false; // asset state yüklendi mi?
 const RTDS_SYM_MAP = { btcusdt:'BTC', ethusdt:'ETH', solusdt:'SOL', xrpusdt:'XRP', dogeusdt:'DOGE', bnbusdt:'BNB', hypeusdt:'HYPE' };
 
-// ─── WS Market Price Cache ────────────────────────────────────────────────────
-// Frontend CLOB WS'den gelen fiyatlar burada saklanır.
+// ─── WS Price Caches ────────────────────────────────────────────────────────
+// Frontend CLOB/RTDS WS'den gelen fiyatlar burada saklanır.
 // Backend state_update her 500ms'de state.assets'i eziyor → WS değerleri kaybolur.
-// Çözüm: backend overwrite'tan sonra bu cache'den tekrar uygula → seesawing önle.
+// Çözüm: backend overwrite'tan sonra bu cache'lerden tekrar uygula → seesawing önle.
 const _wsMarketPrices = {}; // key → {up_ask, up_bid, down_ask, down_bid, ts}
+const _wsLivePrices   = {}; // sym → {val, ts}  — RTDS spot fiyatları (BTC/ETH/SOL...)
 
 // rAF + throttle batching — CLOB 1000+ msg/sn push eder.
 // Her kart için min 150ms görüntüleme süresi (göz okuyabilsin).
@@ -376,8 +377,18 @@ function _startDirectClob() {
         msg.forEach(ch => _applyToken(ch.asset_id, ch.price, ch.best_bid, ch.best_ask));
       }
       // Format 3: single object {asset_id, price}
+      // event_type kontrolü: 'book' ve 'book_delta' = orderbook seviyesi (fiyat değil) → atla
+      // 'price_change', 'last_trade_price', 'tick_size_change' → işle
       else if (msg.asset_id) {
-        _applyToken(msg.asset_id, msg.price || msg.last_trade_price, msg.best_bid, msg.best_ask);
+        const et = (msg.event_type || '').toLowerCase();
+        if (et === 'book' || et === 'book_delta' || et === 'orderbook_update') {
+          // Orderbook snapshot/delta — bids/asks güncellenir ama market price değil
+          // ChatGPT önerisi: orderbook level ≠ trade price, ayrı tutulmalı
+        } else {
+          // price_change, last_trade_price, tick_size_change, veya bilinmeyen → fiyat güncelle
+          const px = msg.price || msg.last_trade_price;
+          _applyToken(msg.asset_id, px, msg.best_bid, msg.best_ask);
+        }
       }
     } catch(e) {}
   };
@@ -422,6 +433,9 @@ function _startDirectRtds() {
         if (arr?.length) val = parseFloat(arr[arr.length - 1]?.value);
       }
       if (!val || val <= 0) return;
+
+      // RTDS cache — state_update ezilmesine karşı
+      _wsLivePrices[sym] = { val, ts: Date.now() };
 
       const keys = _symToKeys[sym] || [];
       keys.forEach(key => {
@@ -518,17 +532,24 @@ function _mergeState(data) {
   if (data.session_pnl  !== undefined) state.sessionPnl   = data.session_pnl;
   if (data.assets    && typeof data.assets === 'object') {
     state.assets = data.assets;
-    // Backend state_update her 500ms'de market fiyatlarını eziyor → seesawing
-    // Çözüm: WS'den gelen değerleri backend overwrite'ının üzerine geri uygula
-    // (WS = gerçek zamanlı, REST = 3sn gecikmeli → WS her zaman öncelikli)
+    // Backend state_update her 500ms'de state.assets'i tamamen eziyor → WS değerleri kaybolur
+    // Çözüm 1: CLOB WS market fiyatlarını geri uygula (up_ask/down_ask)
     Object.entries(_wsMarketPrices).forEach(([k, wsc]) => {
       if (!state.assets[k]) return;
-      if (!wsc.ts || Date.now() - wsc.ts > 10000) return; // 10sn geçmişse stale, kullanma
+      if (!wsc.ts || Date.now() - wsc.ts > 10000) return; // 10sn stale → backend değeri kullan
       if (!state.assets[k].market) state.assets[k].market = {};
       if (wsc.up_ask   !== undefined) state.assets[k].market.up_ask   = wsc.up_ask;
       if (wsc.up_bid   !== undefined) state.assets[k].market.up_bid   = wsc.up_bid;
       if (wsc.down_ask !== undefined) state.assets[k].market.down_ask = wsc.down_ask;
       if (wsc.down_bid !== undefined) state.assets[k].market.down_bid = wsc.down_bid;
+    });
+    // Çözüm 2: RTDS live_price'ı geri uygula (BTC/ETH/SOL spot)
+    Object.entries(state.assets).forEach(([k, a]) => {
+      const sym = a.symbol || k.split('_')[0];
+      const cached = _wsLivePrices[sym];
+      if (cached && cached.val > 0 && Date.now() - cached.ts < 15000) {
+        state.assets[k].live_price = cached.val;
+      }
     });
   }
   if (Array.isArray(data.pinned))                          state.pinned      = data.pinned;
@@ -824,12 +845,18 @@ function updateCardsInPlace(keys) {
     const cd  = a.countdown || 0;
 
     // Delta check — bu card için hiçbir şey değişmediyse DOM'a dokunma
+    // ptb ve live_price dahil — bunlar değişince DOM güncellensin
     const _pv = _prevCardVals[key];
     const rulesStr = a.rules ? Object.values(a.rules).join('') : '';
-    const _cv = { p: a.price, cd, uA: mp.up_ask, dA: mp.down_ask, lp: a.live_price, r: rulesStr };
+    const _cv = {
+      p: a.price, cd, uA: mp.up_ask, dA: mp.down_ask,
+      lp: a.live_price, r: rulesStr,
+      ptb: a.ptb || 0,               // PTB değişince güncelle
+    };
     if (_pv && _pv.p === _cv.p && _pv.cd === _cv.cd &&
         _pv.uA === _cv.uA && _pv.dA === _cv.dA &&
-        _pv.lp === _cv.lp && _pv.r === _cv.r) {
+        _pv.lp === _cv.lp && _pv.r === _cv.r &&
+        _pv.ptb === _cv.ptb) {
       return; // hiçbir şey değişmedi, bu kart için geç
     }
     _prevCardVals[key] = _cv;
@@ -850,6 +877,36 @@ function updateCardsInPlace(keys) {
         priceEl.classList.add(flashCls);
         setTimeout(() => priceEl.classList.remove(flashCls), 600);
       }
+    }
+
+    // PTB ve live_price header güncellemesi
+    // (buildEventCard sadece ilk render'da oluşturuyor — sonrasını biz güncelliyoruz)
+    const ptbEl = card.querySelector('.eac-ptb-val');
+    if (ptbEl) {
+      ptbEl.textContent = a.ptb
+        ? '$' + Number(a.ptb).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})
+        : '...';
+    }
+    const livePriceEl = card.querySelector('.eac-live-price');
+    const priceSepEl  = card.querySelector('.eac-price-sep');
+    if (a.live_price && a.live_price > 0) {
+      const lpStr = '$' + Number(a.live_price).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+      if (livePriceEl) {
+        livePriceEl.textContent = lpStr;
+        livePriceEl.style.display = '';
+      } else {
+        // Eleman henüz yok → oluştur
+        const ptbRow = ptbEl?.parentElement;
+        if (ptbRow) {
+          if (!ptbRow.querySelector('.eac-price-sep')) {
+            ptbRow.insertAdjacentHTML('beforeend', `<span class="eac-price-sep">|</span><span class="eac-live-price">${lpStr}</span>`);
+          }
+        }
+      }
+      if (priceSepEl) priceSepEl.style.display = '';
+    } else {
+      if (livePriceEl) livePriceEl.style.display = 'none';
+      if (priceSepEl)  priceSepEl.style.display  = 'none';
     }
 
     // Price diff for rule calculations
@@ -882,9 +939,13 @@ function updateCardsInPlace(keys) {
     };
     const timeMinStr     = _fmtSec(timeMin);
     const timeMaxStr     = _fmtSec(timeMax);
-    const btcDelta       = (a.live_price && a.ptb) ? (a.live_price - a.ptb) : null;
-    const moveStr        = btcDelta != null
-      ? (btcDelta >= 0 ? '+' : '') + '$' + Math.abs(btcDelta).toFixed(2)
+    // Delta: backend mp.btc_delta öncelikli (simulation_tick'te live_price-ptb hesaplar)
+    // Fallback: frontend kendi hesaplar (RTDS cache + ptb)
+    const btcDelta = mp.btc_delta != null
+      ? mp.btc_delta
+      : (a.live_price && a.ptb ? (a.live_price - a.ptb) : null);
+    const moveStr  = btcDelta != null
+      ? (btcDelta >= 0 ? '+$' : '-$') + Math.abs(btcDelta).toFixed(2)
       : '...';
     const spreadVal      = (mp.slippage_pct || 0).toFixed(2) + '%';
     const posCount       = state.positions.length;
