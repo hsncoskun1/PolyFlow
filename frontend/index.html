@@ -14,9 +14,14 @@
   <!-- ═══════════ SIDEBAR ═══════════ -->
   <aside class="sidebar">
     <div class="sidebar-header">
-      <div class="sidebar-logo">P</div>
-      <span class="sidebar-title">POLYFLOW</span>
-      <button class="notif-bell sidebar-bell" id="notif-bell" onclick="toggleNotifDropdown()" title="Bildirimler">
+      <div class="sidebar-logo-wrap">
+        <div class="sidebar-logo">⬡</div>
+      </div>
+      <div class="sidebar-brand">
+        <span class="sidebar-title">POLY<span class="brand-flow">FLOW</span></span>
+        <span class="sidebar-subtitle">Trading Bot</span>
+      </div>
+      <button class="notif-bell sidebar-bell" id="notif-bell" onclick="event.stopPropagation(); toggleNotifDropdown()" title="Bildirimler">
         🔔<span class="notif-badge" id="notif-badge" style="display:none">0</span>
       </button>
       <div class="notif-dropdown" id="notif-dropdown" style="display:none;">
@@ -56,12 +61,6 @@
       <div class="nav-submenu" id="submenu-settings">
         <div class="nav-subitem" data-page="settings" onclick="switchPage('settings')">
           <span class="nav-subitem-icon">🔧</span><span>Genel</span>
-        </div>
-        <div class="nav-subitem" data-page="strategy" onclick="switchPage('strategy')">
-          <span class="nav-subitem-icon">🎯</span><span>Strateji</span>
-        </div>
-        <div class="nav-subitem" data-page="trade" onclick="switchPage('trade')">
-          <span class="nav-subitem-icon">💹</span><span>Trade Motoru</span>
         </div>
         <div class="nav-subitem" data-page="wallet" onclick="switchPage('wallet')">
           <span class="nav-subitem-icon">👛</span><span>Cüzdan</span>
@@ -190,10 +189,12 @@
 <div id="page-templates" style="display:none;">
   <!-- POSITIONS -->
   <div id="tpl-positions">
-    <div class="tabs">
-      <button class="tab active" onclick="filterPositions('open',this)">Açık</button>
-      <button class="tab" onclick="filterPositions('closed',this)">Kapalı</button>
-      <button class="tab" onclick="filterPositions('all',this)">Tümü</button>
+    <div style="display:flex;justify-content:flex-start;margin-bottom:14px;">
+      <div class="tabs" style="margin:0;">
+        <button class="tab active" onclick="filterPositions('open',this)">Açık</button>
+        <button class="tab" onclick="filterPositions('closed',this)">Kapalı</button>
+        <button class="tab" onclick="filterPositions('all',this)">Tümü</button>
+      </div>
     </div>
     <table class="data-table" style="margin-top:14px;">
       <thead><tr>
@@ -352,17 +353,6 @@
     <div class="grid-2">
       <div class="card">
         <div class="card-title mb-3">🔧 Genel</div>
-        <div class="form-group">
-          <label class="form-label">Trade Modu <span class="info-btn" title="PAPER: simülasyon (gerçek para harcanmaz). LIVE: gerçek para ile trade."></span></label>
-          <select class="form-input" id="cfg-mode">
-            <option value="PAPER">PAPER (Simülasyon)</option>
-            <option value="LIVE">LIVE (Gerçek Para)</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Sunucu Portu <span class="info-btn" title="Dashboard'un çalıştığı port numarası."></span></label>
-          <input type="number" class="form-input" id="cfg-port" value="8002">
-        </div>
         <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px;">
           <label class="flex items-center gap-2">
             <label class="toggle"><input type="checkbox" id="cfg-auto-start"><span class="toggle-slider"></span></label>
@@ -372,6 +362,20 @@
             <label class="toggle"><input type="checkbox" id="cfg-notifications" checked><span class="toggle-slider"></span></label>
             <span class="text-sm">Bildirimler Aktif</span>
           </label>
+        </div>
+        <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border-primary);">
+          <div style="font-size:11px;font-weight:700;color:var(--text-secondary);margin-bottom:8px;">🔔 Tarayıcı Bildirimleri</div>
+          <label class="flex items-center gap-2" style="margin-bottom:6px;">
+            <label class="toggle"><input type="checkbox" id="cfg-browser-notif" onchange="toggleBrowserNotifPermission(this)"><span class="toggle-slider"></span></label>
+            <span class="text-sm">Tarayıcı bildirimleri</span>
+          </label>
+          <div style="font-size:10px;color:var(--text-muted);margin-bottom:6px;">Hangi olaylar için:</div>
+          <div style="display:flex;flex-direction:column;gap:5px;padding-left:4px;">
+            <label class="flex items-center gap-2"><input type="checkbox" id="cfg-bn-trade-open" checked style="accent-color:var(--accent-green);"><span class="text-sm" style="font-size:11px;">İşlem açıldı</span></label>
+            <label class="flex items-center gap-2"><input type="checkbox" id="cfg-bn-trade-close" checked style="accent-color:var(--accent-green);"><span class="text-sm" style="font-size:11px;">İşlem kapandı (TP/SL)</span></label>
+            <label class="flex items-center gap-2"><input type="checkbox" id="cfg-bn-rules-pass" style="accent-color:var(--accent-purple);"><span class="text-sm" style="font-size:11px;">Tüm kurallar geçti</span></label>
+            <label class="flex items-center gap-2"><input type="checkbox" id="cfg-bn-errors" checked style="accent-color:var(--accent-red);"><span class="text-sm" style="font-size:11px;">Hatalar ve uyarılar</span></label>
+          </div>
         </div>
         <button class="btn btn-primary w-full mt-4" onclick="saveSettings()">Genel Ayarları Kaydet</button>
       </div>
@@ -384,7 +388,7 @@
           <div class="connection-item"><span class="status-dot offline" id="set-conn-gamma"></span><span>Gamma API</span></div>
         </div>
         <div class="card-title mb-3 mt-4">Sistem Bilgisi</div>
-        <div class="status-row"><span class="status-label">Versiyon</span><span class="status-value">v1.4.0</span></div>
+        <div class="status-row"><span class="status-label">Versiyon</span><span class="status-value">v1.5.0</span></div>
         <div class="status-row"><span class="status-label">Çalışma Süresi</span><span class="status-value" id="set-uptime">--</span></div>
         <div class="status-row"><span class="status-label">WS İstemci</span><span class="status-value" id="set-ws-clients">0</span></div>
         <div class="status-row"><span class="status-label">Takip Edilen</span><span class="status-value" id="set-assets">35</span></div>

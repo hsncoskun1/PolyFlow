@@ -153,9 +153,9 @@ def addlog(level: str, message: str):
 
 # ─── STATE UPDATE TICK (tüm veri Polymarket'ten) ────────────────────────────
 async def simulation_tick():
-    """Her saniye _market_cache'i okuyup app_state["assets"]'i gunceller."""
+    """Her 50ms _market_cache'i okuyup app_state["assets"]'i gunceller."""
     while True:
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(0.05)
         try:
             asset_states = {}
             now_ts = int(time.time())
@@ -228,7 +228,6 @@ async def simulation_tick():
                 }
 
             app_state["assets"] = asset_states
-            app_state["events"] = [a["event"] for a in asset_states.values()]
             app_state["ws_client_count"] = len(ws_clients)
 
         except Exception as e:
@@ -268,14 +267,44 @@ async def simulation_tick():
 
 
 # ─── BROADCAST ────────────────────────────────────────────────────────────────
-async def broadcast_state():
+_last_broadcast_hash: str = ""
+
+def _build_broadcast_payload() -> str:
+    """Sadece hızlı değişen alanları gönder — events alanı assets.event ile aynı, duplicate."""
+    fast = {
+        "bot_running":       app_state["bot_running"],
+        "mode":              app_state.get("mode", "LIVE"),
+        "balance":           app_state.get("balance", 0.0),
+        "session_pnl":       app_state.get("session_pnl", 0.0),
+        "assets":            app_state.get("assets", {}),
+        "pinned":            app_state.get("pinned", []),
+        "positions":         app_state.get("positions", []),
+        "trade_history":     app_state.get("trade_history", []),
+        "connection_status": app_state.get("connection_status", {}),
+        "strategy_status":   app_state.get("strategy_status", "SCANNING"),
+        "ws_client_count":   app_state.get("ws_client_count", 0),
+        "asset_settings":    app_state.get("asset_settings", {}),
+    }
+    return json.dumps({"type": "state_update", "data": fast})
+
+
+async def broadcast_state(force: bool = False):
+    global _last_broadcast_hash
     if not ws_clients:
         return
     try:
-        payload = json.dumps({"type": "state_update", "data": app_state})
+        payload = _build_broadcast_payload()
     except Exception as e:
         logger.error(f"serialize error: {e}")
         return
+
+    # Change detection — sadece data değiştiyse gönder (CPU ve bant genişliği tasarrufu)
+    if not force:
+        h = str(hash(payload))
+        if h == _last_broadcast_hash:
+            return
+        _last_broadcast_hash = h
+
     dead = set()
     for client in ws_clients:
         try:
@@ -722,7 +751,13 @@ async def _ptb_loop():
     while True:
         try:
             now_ts = time.time()
-            for key, real in list(_market_cache.items()):
+            # Priority: işlem açılacaklar (pinned) first
+            _all_market_keys = list(_market_cache.keys())
+            _pinned_set = set(app_state.get("pinned", []))
+            _ordered_market_keys = [k for k in _all_market_keys if k in _pinned_set] + [k for k in _all_market_keys if k not in _pinned_set]
+            for key in _ordered_market_keys:
+                real = _market_cache.get(key)
+                if real is None: continue
                 slug = real.get("slug", "")
                 if not slug:
                     continue
@@ -1190,13 +1225,12 @@ async def _rtds_coin_loop(sym: str, rtds_symbol: str):
                 retry = min(retry * 2, 30)
 
 async def start_rtds():
-    """Tum coinler icin RTDS WebSocket baglantilari baslat."""
+    """Tum coinler icin RTDS WebSocket baglantilari baslat — paralel, stagger yok."""
     global _rtds_running
     _rtds_running = True
     for sym, rtds_sym in RTDS_SYMBOLS.items():
         asyncio.create_task(_rtds_coin_loop(sym, rtds_sym))
-        await asyncio.sleep(0.5)  # baglantilari kademeli baslat
-    addlog("success", f"RTDS basladi: {len(RTDS_SYMBOLS)} coin izleniyor")
+    addlog("success", f"RTDS basladi: {len(RTDS_SYMBOLS)} coin paralel izleniyor")
 
 
 async def relayer_health_loop():
@@ -1229,6 +1263,13 @@ app.add_middleware(
 async def ws_endpoint(ws: WebSocket):
     await ws.accept()
     ws_clients.add(ws)
+
+    # Anlık state'i yeni istemciye hemen gönder (broadcast_loop'u bekleme)
+    try:
+        await ws.send_text(_build_broadcast_payload())
+    except Exception:
+        pass
+
     for entry in _log_buffer[:15]:
         try:
             await ws.send_text(json.dumps({
@@ -1503,6 +1544,44 @@ async def inject_demo_position():
 async def get_logs():
     return {"logs": _log_buffer[:100]}
 
+
+@app.get("/api/verify")
+async def verify_data():
+    """Dashboard verilerini Polymarket REST API ile karşılaştır — veri doğruluğu kontrolü."""
+    results = {}
+    now_ts = time.time()
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        for key, cached in list(_market_cache.items()):
+            slug = cached.get("slug", "")
+            if not slug:
+                continue
+            try:
+                r = await client.get(f"https://gamma-api.polymarket.com/markets?slug={slug}")
+                if r.status_code != 200:
+                    continue
+                data = r.json()
+                m = data[0] if isinstance(data, list) and data else data
+                if not m:
+                    continue
+                prices = json.loads(m.get("outcomePrices", "[]"))
+                pm_up   = float(prices[0]) if len(prices) > 0 else None
+                pm_down = float(prices[1]) if len(prices) > 1 else None
+                dash_up   = cached.get("up_price", 0)
+                dash_down = cached.get("down_price", 0)
+                mp = _asset_market.get(key, {})
+                results[key] = {
+                    "polymarket": {"up": round(pm_up*100, 2) if pm_up else None, "down": round(pm_down*100, 2) if pm_down else None},
+                    "dashboard":  {"up": round(dash_up*100, 2), "down": round(dash_down*100, 2)},
+                    "clob_live":  {"up_ask": round(mp.get("up_ask",0)*100,2), "up_bid": round(mp.get("up_bid",0)*100,2),
+                                   "down_ask": round(mp.get("down_ask",0)*100,2), "spread_pct": round(mp.get("slippage_pct",0),2)},
+                    "diff_up":    round(abs(pm_up - dash_up)*100, 3) if pm_up else None,
+                    "match":      abs((pm_up or 0) - dash_up) < 0.03 if pm_up else None,
+                    "end_ts":     cached.get("end_ts"), "cd_sn": max(0, int(cached.get("end_ts",0) - now_ts))
+                }
+            except Exception as ex:
+                results[key] = {"error": str(ex)}
+    return {"ok": True, "verified_at": int(now_ts), "results": results}
+
 @app.get("/api/wallet")
 async def get_wallet():
     cfg = get_wallet_config()
@@ -1533,7 +1612,7 @@ async def get_wallet():
 # ─── WALLET SAVE ──────────────────────────────────────────────────────────────
 @app.post("/api/wallet/save")
 async def save_wallet(body: dict):
-    """Save wallet/API credentials to .env file (keeps DISABLED_ prefix on private key & funder)."""
+    """Save wallet/API credentials to .env file."""
     env_path = BASE_DIR / ".env"
     lines = []
     lines.append("## POLYFLOW .env")
@@ -1549,11 +1628,10 @@ async def save_wallet(body: dict):
     relayer_api_key = body.get("relayer_api_key", "")
     relayer_address = body.get("relayer_address", "")
 
-    # Private key & funder always DISABLED by default (safety)
     if pk:
-        lines.append(f"DISABLED_POLYMARKET_PRIVATE_KEY={pk}")
+        lines.append(f"POLYMARKET_PRIVATE_KEY={pk}")
     if funder:
-        lines.append(f"DISABLED_POLYMARKET_FUNDER={funder}")
+        lines.append(f"POLYMARKET_FUNDER={funder}")
     lines.append("")
 
     # API keys: active

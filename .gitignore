@@ -39,3 +39,6 @@ node_modules/
 *.rar
 *.zip
 *.bak
+*.db
+*.db-shm
+*.db-wal

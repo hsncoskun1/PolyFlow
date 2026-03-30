@@ -49,6 +49,7 @@ const state = {
   assetSettings: {},
   // Manual sort order
   manualOrder: [],
+  _cardNotifications: {},  // key → {icon, text, type}
   // Collapsible group state
   collapsedGroups: {},
 };
@@ -61,6 +62,43 @@ let _prevPrices    = {};
 let _chipsBuilt    = false;
 let _lastRenderKey = ''; // flickering prevention
 let _dragSym       = null; // drag-and-drop source
+let _rafPending    = false; // requestAnimationFrame batching
+let _prevCardVals  = {};   // key → {price, cd, upPct, dnPct, rules} — delta check
+
+// ─── Direkt Polymarket Feed ───────────────────────────────────────────────────
+// arbypoly gibi siteler Polymarket WS'e direkt tarayıcıdan bağlanır (1 hop, ~5ms).
+// POLYFLOW: backend sadece kural/trade için; fiyat görüntüleme direkt feedden.
+let _directClob   = null;  // CLOB WS — UP/DOWN token fiyatları (Polymarket)
+let _directRtds   = null;  // RTDS WS — Spot fiyatlar (Binance via Polymarket)
+let _tokenMap     = {};    // tokenId → {key:'BTC_5M', side:'up'|'down'}
+let _symToKeys    = {};    // 'BTC' → ['BTC_5M','BTC_15M',...]
+let _directReady  = false; // asset state yüklendi mi?
+const RTDS_SYM_MAP = { btcusdt:'BTC', ethusdt:'ETH', solusdt:'SOL', xrpusdt:'XRP', dogeusdt:'DOGE', bnbusdt:'BNB', hypeusdt:'HYPE' };
+
+// rAF + throttle batching — CLOB 1000+ msg/sn push eder.
+// Her kart için min 150ms görüntüleme süresi (göz okuyabilsin).
+// Aynı frame'deki tüm değişiklikler toplu tek DOM update'e indirgenir.
+let _directRafPending = false;
+const _dirtyKeys      = new Set();
+const _cardLastShown  = {};  // key → timestamp — throttle için
+const DISPLAY_THROTTLE_MS = 150; // min kart güncelleme aralığı
+
+function _scheduleDirectUpdate(key) {
+  const now = Date.now();
+  const last = _cardLastShown[key] || 0;
+  if (now - last < DISPLAY_THROTTLE_MS) return; // çok erken, atla
+  _cardLastShown[key] = now;
+  _dirtyKeys.add(key);
+  if (!_directRafPending) {
+    _directRafPending = true;
+    requestAnimationFrame(() => {
+      _directRafPending = false;
+      const keys = [..._dirtyKeys];
+      _dirtyKeys.clear();
+      if (keys.length) updateCardsInPlace(keys);
+    });
+  }
+}
 
 // Helper: event'e özgü ayarları döndür — key = "BTC_5M" gibi tam event key'i
 // event_settings[key] varsa global'in üstüne yazar, yoksa sadece global kullanılır
@@ -242,6 +280,164 @@ function toggleNavSubmenu(name) {
 }
 
 // ═══════════════════════════════════════════
+// ─── Direkt Feed: Token Map ───────────────────────────────────────────────────
+function _buildTokenMap() {
+  const newTokenMap = {};
+  const newSymToKeys = {};
+  Object.entries(state.assets).forEach(([key, a]) => {
+    const sym = a.symbol || key.split('_')[0];
+    if (!newSymToKeys[sym]) newSymToKeys[sym] = [];
+    if (!newSymToKeys[sym].includes(key)) newSymToKeys[sym].push(key);
+    const tokens = a.event?.tokens || [];
+    if (tokens[0]) newTokenMap[tokens[0]] = { key, side: 'up' };
+    if (tokens[1]) newTokenMap[tokens[1]] = { key, side: 'down' };
+  });
+  _tokenMap  = newTokenMap;
+  _symToKeys = newSymToKeys;
+}
+
+// ─── Direkt Feed: CLOB WebSocket (UP/DOWN token fiyatları) ───────────────────
+function _startDirectClob() {
+  if (_directClob) { try { _directClob.close(); } catch(e){} _directClob = null; }
+  const tokenIds = Object.keys(_tokenMap);
+  if (!tokenIds.length) return;
+
+  _directClob = new WebSocket('wss://ws-subscriptions-clob.polymarket.com/ws/market');
+
+  _directClob.onopen = () => {
+    _directClob.send(JSON.stringify({
+      assets_ids: tokenIds,
+      type: 'market',
+      custom_feature_enabled: true,
+    }));
+  };
+
+  _directClob.onmessage = ({ data }) => {
+    if (!data || data === 'PONG') return;
+    try {
+      const msg = JSON.parse(data);
+
+      const _applyToken = (tokenId, price, bid, ask) => {
+        const m = _tokenMap[String(tokenId)];
+        if (!m) return;
+        const a = state.assets[m.key];
+        if (!a) return;
+        const p = parseFloat(price) || (bid && ask ? (parseFloat(bid) + parseFloat(ask)) / 2 : 0);
+        if (!p) return;
+        if (!a.market) a.market = {};
+        if (m.side === 'up') {
+          a.price = p;
+          a.market.up_ask  = parseFloat(ask || p);
+          a.market.up_bid  = parseFloat(bid || p - 0.005);
+        } else {
+          a.market.down_ask = parseFloat(ask || p);
+          a.market.down_bid = parseFloat(bid || p - 0.005);
+        }
+        // Gerçek spread: UP_ask + DOWN_ask - 1 → piyasanın "vigi" (vig/juice)
+        // Örn: UP_ask=0.52, DOWN_ask=0.52 → spread=(0.52+0.52-1)*100 = 4%
+        const upAsk  = a.market.up_ask  || 0.5;
+        const dnAsk  = a.market.down_ask || 0.5;
+        a.market.slippage_pct = Math.max(0, (upAsk + dnAsk - 1) * 100);
+        _prevCardVals[m.key] = null; // force re-render
+        _scheduleDirectUpdate(m.key); // throttle + rAF batch
+      };
+
+      // Format 1: {market, price_changes:[{asset_id, price, best_bid, best_ask}]}
+      if (msg.price_changes) {
+        msg.price_changes.forEach(ch =>
+          _applyToken(ch.asset_id, ch.price, ch.best_bid, ch.best_ask)
+        );
+      }
+      // Format 2: [{market, asset_id, price, ...}] — initial snapshot array
+      else if (Array.isArray(msg)) {
+        msg.forEach(ch => _applyToken(ch.asset_id, ch.price, ch.best_bid, ch.best_ask));
+      }
+      // Format 3: single object {asset_id, price}
+      else if (msg.asset_id) {
+        _applyToken(msg.asset_id, msg.price || msg.last_trade_price, msg.best_bid, msg.best_ask);
+      }
+    } catch(e) {}
+  };
+
+  _directClob.onclose = () => {
+    setTimeout(() => { if (_directReady) _startDirectClob(); }, 3000);
+  };
+}
+
+// ─── Direkt Feed: RTDS WebSocket (spot fiyatlar — BTC/ETH/SOL etc.) ──────────
+function _startDirectRtds() {
+  if (_directRtds) { try { _directRtds.close(); } catch(e){} _directRtds = null; }
+
+  _directRtds = new WebSocket('wss://ws-live-data.polymarket.com');
+
+  _directRtds.onopen = () => {
+    // Tüm coinlere tek bağlantıdan subscribe ol (payload.symbol field var)
+    Object.keys(RTDS_SYM_MAP).forEach(rtdsSym => {
+      _directRtds.send(JSON.stringify({
+        action: 'subscribe',
+        subscriptions: [{ topic: 'crypto_prices', type: '*', filters: JSON.stringify({ symbol: rtdsSym }) }],
+      }));
+    });
+  };
+
+  _directRtds.onmessage = ({ data }) => {
+    if (!data || data === 'PONG') return;
+    try {
+      const msg = JSON.parse(data);
+      const payload = msg.payload;
+      if (!payload) return;
+
+      // Symbol tayini — payload.symbol varsa direkt kullan
+      const rtdsSym = (payload.symbol || payload.s || '').toLowerCase();
+      const sym = RTDS_SYM_MAP[rtdsSym];
+      if (!sym) return;
+
+      // Değer çekimi
+      let val = parseFloat(payload.value);
+      if (!val || val <= 0) {
+        const arr = payload.data;
+        if (arr?.length) val = parseFloat(arr[arr.length - 1]?.value);
+      }
+      if (!val || val <= 0) return;
+
+      const keys = _symToKeys[sym] || [];
+      keys.forEach(key => {
+        const a = state.assets[key];
+        if (!a || a.live_price === val) return;
+        a.live_price = val;
+        _prevCardVals[key] = null; // force re-render
+        _scheduleDirectUpdate(key); // rAF batch
+      });
+    } catch(e) {}
+  };
+
+  _directRtds.onclose = () => {
+    setTimeout(() => { if (_directReady) _startDirectRtds(); }, 3000);
+  };
+}
+
+// ─── Direkt Feed: Başlat / Token map yenile ───────────────────────────────────
+// Asset KEY değişimini VE token ID değişimini (her 5dk yeni window) izle
+let _knownFeedHash = '';
+function _maybeStartDirectFeeds() {
+  if (!Object.keys(state.assets).length) return;
+  // Hash: asset keys + token ID'lerini birlikte kontrol et (5dk window değişimi)
+  const feedHash = Object.entries(state.assets)
+    .sort(([a],[b]) => a.localeCompare(b))
+    .map(([key, a]) => key + ':' + (a.event?.tokens?.[0] || '').slice(0,8))
+    .join('|');
+  if (feedHash === _knownFeedHash) return; // hiçbir şey değişmedi
+  _knownFeedHash = feedHash;
+
+  _buildTokenMap();
+  _directReady = true;
+
+  // Yeni token ID'leri geldi → CLOB yeniden subscribe (RTDS token-bağımsız, gerek yok)
+  _startDirectClob();
+  if (!_directRtds || _directRtds.readyState > 1) _startDirectRtds();
+}
+
+// ═══════════════════════════════════════════
 // WEBSOCKET
 // ═══════════════════════════════════════════
 function connectWS() {
@@ -257,9 +453,20 @@ function connectWS() {
   ws.onmessage = ({ data }) => {
     try {
       const msg = JSON.parse(data);
-      if (msg.type === 'state_update')  handleStateUpdate(msg.data);
-      else if (msg.type === 'log')      addLog(msg.level || 'info', msg.message);
-      else if (msg.type === 'rate_limit') showRateLimitPopup(msg.retry_after || 60);
+      if (msg.type === 'state_update') {
+        // State'i hemen merge et (saf veri, DOM yok)
+        _mergeState(msg.data);
+        // DOM güncellemesini bir sonraki animation frame'e ertele — birden fazla
+        // WS mesajı aynı frame'e düşerse tek bir DOM update yapılır (20→16ms)
+        if (!_rafPending) {
+          _rafPending = true;
+          requestAnimationFrame(() => { _rafPending = false; updateUI(); });
+        }
+      } else if (msg.type === 'log') {
+        addLog(msg.level || 'info', msg.message);
+      } else if (msg.type === 'rate_limit') {
+        showRateLimitPopup(msg.retry_after || 60);
+      }
     } catch (e) { /* ignore */ }
   };
 
@@ -280,20 +487,30 @@ function wsSend(obj) {
 // ═══════════════════════════════════════════
 // STATE UPDATE
 // ═══════════════════════════════════════════
-function handleStateUpdate(data) {
-  if (data.bot_running  !== undefined) state.botRunning  = data.bot_running;
-  if (data.mode)                       state.mode        = data.mode;
-  if (data.balance      !== undefined) state.balance     = data.balance;
-  if (data.session_pnl  !== undefined) state.sessionPnl  = data.session_pnl;
-  if (data.assets    && typeof data.assets    === 'object') state.assets      = data.assets;
+// Hızlı state merge — sadece veri, DOM yok (rAF'tan önce çağrılır)
+function _mergeState(data) {
+  if (data.bot_running  !== undefined) state.botRunning   = data.bot_running;
+  if (data.mode)                       state.mode         = data.mode;
+  if (data.balance      !== undefined) state.balance      = data.balance;
+  if (data.session_pnl  !== undefined) state.sessionPnl   = data.session_pnl;
+  if (data.assets    && typeof data.assets === 'object')   state.assets      = data.assets;
   if (Array.isArray(data.pinned))                          state.pinned      = data.pinned;
   if (data.selected_asset)                                 state.selectedAsset = data.selected_asset;
   if (Array.isArray(data.positions))                       state.positions   = data.positions;
   if (Array.isArray(data.trade_history))                   state.tradeHistory = data.trade_history;
-  if (data.connection_status)          state.connections = data.connection_status;
+  if (data.connection_status)          state.connections  = data.connection_status;
   if (data.strategy_status)            state.strategyStatus = data.strategy_status;
   if (data.ws_client_count !== undefined) state.wsClientCount = data.ws_client_count;
+  if (data.asset_settings && typeof data.asset_settings === 'object') {
+    Object.assign(state.assetSettings, data.asset_settings);
+  }
+  // Asset listesi değiştiyse direkt feed'leri yenile (yeni token ID'leri)
+  if (data.assets) _maybeStartDirectFeeds();
+}
 
+// Eski API uyumluluğu için (doğrudan çağrılan yerler için)
+function handleStateUpdate(data) {
+  _mergeState(data);
   updateUI();
 }
 
@@ -440,15 +657,16 @@ function renderEventsList() {
     return;
   }
 
-  // Timeframe filter
+  // Timeframe filter — pinned (işlem açılacaklar) always shown regardless of TF
+  const _pinnedKeys = allKeys.filter(k => state.pinned.includes(k));
   let tfFiltered;
   if (state.timeframe === 'ALL') {
     tfFiltered = allKeys;
   } else if (state.timeframe === 'PINNED') {
-    // Pinli mod: sadece pinlenmis eventleri goster (tum TF'ler)
-    tfFiltered = allKeys.filter(k => state.pinned.includes(k));
+    tfFiltered = _pinnedKeys;
   } else {
-    tfFiltered = allKeys.filter(k => k.endsWith('_' + state.timeframe));
+    const tfMatch = allKeys.filter(k => k.endsWith('_' + state.timeframe));
+    tfFiltered = [...new Set([..._pinnedKeys, ...tfMatch])];
   }
 
   // Pinned/untracked filter
@@ -475,6 +693,8 @@ function renderEventsList() {
     : baseKeys.filter(k => k.split('_')[0] === state.chipFilter);
 
   setText('events-count', `${filtered.length} market${filtered.length !== 1 ? 's' : ''}`);
+  const tradingCount = state.pinned.length;
+  setText('nav-pinned-count', `${tradingCount}/${allKeys.length}`);
 
   // Toolbar stats
   const wins   = state.tradeHistory.filter(t => (t.pnl||0) > 0).length;
@@ -546,9 +766,9 @@ function renderEventsList() {
       return out;
     };
 
-    html += buildGroup('aktif',   'Aktif Pozisyonlar', 'active', pinnedWithPos, false);
-    html += buildGroup('tracked', 'Takip Edilenler',   'active', pinnedNoPos,   pinnedWithPos.length > 0);
-    html += buildGroup('others',  'Diğer Marketler',   '',       unpinned,      pinnedWithPos.length > 0 || pinnedNoPos.length > 0);
+    html += buildGroup('aktif',   'Aktif Pozisyonlar',   'active', pinnedWithPos, false);
+    html += buildGroup('trading', 'İşlem Açılacaklar',   'active', pinnedNoPos,   pinnedWithPos.length > 0);
+    html += buildGroup('others',  'İşlem Açılmayanlar',  '',       unpinned,      pinnedWithPos.length > 0 || pinnedNoPos.length > 0);
 
     container.innerHTML = html;
   } else {
@@ -556,7 +776,7 @@ function renderEventsList() {
   }
 }
 
-// ─── In-Place Card Update (anti-flicker) ──
+// ─── In-Place Card Update (anti-flicker + delta check) ──
 function updateCardsInPlace(keys) {
   const ruleKeys = ['time','price','btc_move','slippage','event_limit','max_positions'];
   keys.forEach(key => {
@@ -565,6 +785,17 @@ function updateCardsInPlace(keys) {
     const sym = a.symbol || key.split('_')[0];
     const mp  = a.market || {};
     const cd  = a.countdown || 0;
+
+    // Delta check — bu card için hiçbir şey değişmediyse DOM'a dokunma
+    const _pv = _prevCardVals[key];
+    const rulesStr = a.rules ? Object.values(a.rules).join('') : '';
+    const _cv = { p: a.price, cd, uA: mp.up_ask, dA: mp.down_ask, lp: a.live_price, r: rulesStr };
+    if (_pv && _pv.p === _cv.p && _pv.cd === _cv.cd &&
+        _pv.uA === _cv.uA && _pv.dA === _cv.dA &&
+        _pv.lp === _cv.lp && _pv.r === _cv.r) {
+      return; // hiçbir şey değişmedi, bu kart için geç
+    }
+    _prevCardVals[key] = _cv;
     const cdStr = fmtCD(cd);
     const barPct   = cd > 0 ? Math.max(1, ((300 - cd) / 300) * 100) : 0;
     const barColor = cd <= 20 ? 'var(--accent-red)' : cd <= 60 ? 'var(--accent-yellow)' : 'var(--accent-purple)';
@@ -601,8 +832,8 @@ function updateCardsInPlace(keys) {
     const spreadDisabled = (st.max_slippage_pct || 0.03) >= 0.5;
     const upAsk          = mp.up_ask  || 0.5;
     const downAsk        = mp.down_ask || 0.5;
-    const upPct          = (upAsk   * 100).toFixed(1);
-    const dnPct          = (downAsk * 100).toFixed(1);
+    const upPct          = (upAsk   * 100).toFixed(0);
+    const dnPct          = (downAsk * 100).toFixed(0);
     const timeMin        = st.min_entry_seconds   || 10;
     const timeMax        = st.time_rule_threshold || 90;
     const timeMinStr     = timeMin < 60 ? `${timeMin}sn` : `${Math.floor(timeMin/60)}:${String(timeMin%60).padStart(2,'0')}dk`;
@@ -640,7 +871,12 @@ function updateCardsInPlace(keys) {
       rb.className = `eac-rb rb-${status}`;
       if (mainTxt !== undefined) {
         const mainEl = rb.querySelector('.eac-rb-main');
-        if (mainEl) mainEl.textContent = mainTxt;
+        if (mainEl && mainEl.textContent !== mainTxt) {
+          mainEl.textContent = mainTxt;
+          mainEl.classList.remove('rb-val-flash');
+          void mainEl.offsetWidth; // reflow to restart animation
+          mainEl.classList.add('rb-val-flash');
+        }
       }
     });
 
@@ -764,8 +1000,8 @@ function renderEventCard(key) {
 
   const upAsk   = mp.up_ask  || 0.5;
   const downAsk = mp.down_ask || 0.5;
-  const upPct   = (upAsk  * 100).toFixed(1);
-  const dnPct   = (downAsk * 100).toFixed(1);
+  const upPct   = (upAsk  * 100).toFixed(0);
+  const dnPct   = (downAsk * 100).toFixed(0);
 
   const pinned   = state.pinned.includes(key);
   const hasPos   = a.has_position;
@@ -853,9 +1089,9 @@ function renderEventCard(key) {
             : `<span class="eac-name">${shortTitle}</span>`
           }
           <span class="eac-tf">${{'5M':'5DK','15M':'15DK','1H':'1SA','4H':'4SA','1D':'1G'}[tf]||tf}</span>
-          <button class="pin-btn pin-btn-title ${pinned ? 'pinned' : ''}"
+          <button class="trade-btn ${pinned ? 'active' : ''}"
             onclick="event.stopPropagation(); togglePin('${key}')"
-            title="${pinned ? 'Takipten çıkar' : 'Takibe al'}">${pinned ? '📌' : '📍'}</button>
+            title="${pinned ? 'İşlem açılacaklardan çıkar' : 'İşlem açılacaklara ekle'}">$</button>
           ${liveBadge}
           ${hasPos ? '<span class="badge-pos">●</span>' : ''}
           ${(allPass && state.botRunning && pinned) ? '<span class="badge-ready">AL</span>' : ''}
@@ -868,9 +1104,18 @@ function renderEventCard(key) {
       </div>
     </div>
 
-    <!-- ORTA: sadece ayar uyarısı (varsa), ortalanmış sarı metin -->
+    <!-- ORTA: bildirim alanı -->
     <div class="eac-hdr-mid">
-      ${!settingsConfigured ? '<span class="eac-no-settings-warn">⚠ Ayar yapmadan işlem açılamaz</span>' : ''}
+      ${(()=>{
+        // Transient trade bildirimleri (bot events, TP, SL, vs.) önceliklidir
+        const notif = (state._cardNotifications || {})[key];
+        if (notif) return `<span class="eac-card-notif notif-${notif.type}">${notif.icon} ${notif.text}</span>`;
+        // State'den hesaplanan kalıcı bildirim
+        const isPinned = state.pinned && state.pinned.includes(key);
+        if (isPinned && settingsConfigured) return `<span class="eac-card-notif notif-info">💸 Tüm ayarlar tamam — kural taraması yapılıyor</span>`;
+        if (!isPinned && settingsConfigured) return `<span class="eac-card-notif notif-success">✅ Ayarlandı — işlem açmaya hazır</span>`;
+        return `<span class="eac-card-notif notif-warn">⚠ Ayar yapmadan işlem açılamaz</span>`;
+      })()}
     </div>
 
     <!-- SAG: 0/6 + kurallar (her zaman gösterilir) -->
@@ -916,14 +1161,14 @@ function renderEventCard(key) {
       </div>
       <div class="eac-hdr-gap"></div>
       ${pinned
-        ? `<button class="eac-settings-quick${!settingsConfigured ? ' needs-settings' : hasCustomSettings ? ' custom' : ''}"
+        ? `<button class="eac-settings-quick${!settingsConfigured ? ' needs-settings' : ''}"
                onclick="event.stopPropagation(); openAssetSettings('${key}')"
-               title="${!settingsConfigured ? '⚠️ Ayar gerekli — bot bu event\'te işlem açamaz!' : hasCustomSettings ? 'Özel ayar aktif' : 'Bu event için ayar yap'}">
-               ${!settingsConfigured ? '⚠️ Ayar Gerekli' : hasCustomSettings ? 'Ayarlar ✦' : 'Ayarlar'}
+               title="${!settingsConfigured ? '⚠️ Ayar gerekli!' : 'Ayarları düzenle'}">
+               ${!settingsConfigured ? 'Ayar Gerekli' : 'Ayarlar'}
              </button>`
         : `<button class="eac-settings-quick untracked-add"
-               onclick="event.stopPropagation(); togglePin('${key}')"
-               title="Takibe al">📍</button>`
+               onclick="event.stopPropagation(); pinAndOpenSettings('${key}')"
+               title="Ayarla ve işlem açılacaklar listesine ekle">Ayarlar</button>`
       }
     </div>
 
@@ -938,25 +1183,36 @@ function renderEventCard(key) {
 
 // min/max: kullanıcıya gösterilen birimde (% alanlar zaten ×100 gösterilir)
 const EVENT_SETTING_FIELDS = [
-  { key:'min_entry_price',                     label:'Min Giriş Fiyatı',            unit:'%',  placeholder:'örn: 76',  min:50,  max:99,    step:'1',   hint:'UP token min olasılık eşiği. 76 = %76 anlamına gelir. Altında işlem açılmaz.' },
-  { key:'max_entry_price',                     label:'Max Giriş Fiyatı',            unit:'%',  placeholder:'örn: 97',  min:51,  max:99,    step:'1',   hint:'UP token max olasılık eşiği. 97 = %97 anlamına gelir. Üzerinde işlem açılmaz.' },
-  { key:'time_rule_threshold',                 label:'Max Entry Süresi',            unit:'sn', placeholder:'örn: 90',  min:10,  max:300,   step:'5',   hint:'Event bitişine max kaç saniye kaldığında giriş yapılabilir (örn. 90 saniye).' },
-  { key:'min_entry_seconds',                   label:'Min Entry Süresi',            unit:'sn', placeholder:'örn: 20',  min:0,   max:120,   step:'1',   hint:'Event bitişine en az kaç saniye kalmalı. Bu süreden az kaldıysa giriş yapılmaz.' },
-  { key:'min_move_delta',                      label:'Min Fiyat Hareketi',          unit:'%',  placeholder:'örn: 2',   min:0,   max:30,    step:'0.5', hint:'UP fiyatının %50\'den minimum sapması. 2 = %2 hareket gerekli.' },
-  { key:'max_slippage_pct',                    label:'Max Spread',                  unit:'%',  placeholder:'örn: 3',   min:0.5, max:50,    step:'0.5', hint:'Bid-ask spread üst sınırı. 3 = %3. 50 girersen kural devre dışı kalır.' },
-  { key:'event_trade_limit',                   label:'Event Başına Max İşlem',      unit:'↺',  placeholder:'örn: 1',   min:1,   max:10,    step:'1',   hint:'Bu event penceresinde açılabilecek maksimum pozisyon sayısı.' },
-  { key:'max_open_positions',                  label:'Toplam Max Açık Pozisyon',    unit:'↺',  placeholder:'örn: 1',   min:1,   max:20,    step:'1',   hint:'Tüm eventlerde aynı anda açık kalabilecek toplam maksimum pozisyon.' },
-  { key:'order_amount',                        label:'İşlem Miktarı',               unit:'$',  placeholder:'örn: 2',   min:1,   max:10000, step:'0.5', hint:'Her işlemde kullanılacak USDC miktarı (örn. 2 = $2 USDC).' },
-  { key:'target_exit_price',                   label:'Hedef Çıkış Fiyatı',         unit:'%',  placeholder:'örn: 90',  min:51,  max:99,    step:'1',   hint:'UP token bu fiyata ulaşınca pozisyon otomatik kapatılır. 90 = %90.' },
-  { key:'stop_loss_price',                     label:'Stop Loss Fiyatı',            unit:'%',  placeholder:'örn: 80',  min:1,   max:99,    step:'1',   hint:'UP token bu fiyatın altına düşünce zararı kes. 80 = %80.' },
-  { key:'force_sell_before_resolution_seconds',label:'Force Sell Süresi',           unit:'sn', placeholder:'örn: 15',  min:0,   max:120,   step:'1',   hint:'Event bitmeden kaç saniye önce pozisyon zorla kapatılsın (örn. 15 saniye).' },
+  // — Giriş Koşulları —
+  { key:'min_entry_price',    label:'Min Giriş',         unit:'%',  min:50,  max:99,    step:'1',   placeholder:'örn: 76',  hint:'UP token minimum olasılık eşiği. Bu değerin altında işlem açılmaz. (örn: 76 = %76)' },
+  { key:'max_entry_price',    label:'Max Giriş',         unit:'%',  min:51,  max:99,    step:'1',   placeholder:'örn: 97',  hint:'UP token maksimum olasılık eşiği. Bu değerin üzerinde işlem açılmaz. (örn: 97 = %97)' },
+  { key:'time_rule_threshold',label:'Zaman Kuralı',       unit:'sn', min:10,  max:300,   step:'5',   placeholder:'örn: 90',  hint:'Ne kadar zaman kala işleme girsin? Sayaç bu değerin altına inince giriş koşulu aktifleşir. Örn: 90 → event bitmesine 90sn kalınca pencere açılır.' },
+  { key:'min_entry_seconds',  label:'Min Kalan Süre',    unit:'sn', min:0,   max:120,   step:'1',   placeholder:'örn: 20',  hint:'Event bitmesine en az bu kadar süre kalmalı. Bu süreden azsa giriş yapılmaz.' },
+  { key:'min_move_delta',     label:'Min Fiyat Hareketi',unit:'$',  min:0,   max:5000,  step:'1',   placeholder:'örn: 70',  hint:'Coin fiyatında son periyotta gereken minimum $ değişimi. Düşük volatilitede giriş engellenir.' },
+  { key:'max_slippage_pct',   label:'Max Spread',        unit:'%',  min:0.5, max:50,    step:'0.5', placeholder:'örn: 3',   hint:'Bid-ask spread (alış-satış farkı) üst sınırı. %50 girersen kural devre dışı kalır.' },
+  // — Çıkış Stratejisi —
+  { key:'target_exit_pct',    label:'Hedef Çıkış',       unit:'%',  min:1,   max:100,   step:'0.5', placeholder:'örn: 15',  hint:'Giriş fiyatına göre kâr yüzdesi. Örn: 15 → %15 kâra ulaşınca pozisyon kapanır.' },
+  { key:'stop_loss_pct',      label:'Stop Loss',         unit:'%',  min:0.5, max:50,    step:'0.5', placeholder:'örn: 5',   hint:'Giriş fiyatına göre zarar yüzdesi limiti. Örn: 5 → %5 zararda pozisyon kesilir.' },
+  { key:'force_sell_before_resolution_seconds', label:'Force Sell', unit:'sn', min:0, max:120, step:'1', placeholder:'örn: 15', hint:'Event bitmesine bu kadar süre kaldığında pozisyon zorla kapatılır.' },
+  { key:'sell_retry_count',   label:'Satış Deneme',      unit:'↺',  min:1,   max:500,   step:'1',   placeholder:'örn: 200', hint:'Satış emri başarısız olursa kaç kez yeniden denenecek.' },
+  // — Limitler —
+  { key:'order_amount',       label:'İşlem Miktarı',     unit:'$',  min:1,   max:10000, step:'0.5', placeholder:'örn: 2',   hint:'Her işlemde kullanılacak USDC miktarı.' },
+  { key:'event_trade_limit',  label:'Event Başına Max',  unit:'↺',  min:1,   max:10,    step:'1',   placeholder:'örn: 1',   hint:'Bu event penceresinde açılabilecek toplam pozisyon sayısı.' },
+  { key:'max_open_positions', label:'Toplam Max Açık',   unit:'↺',  min:1,   max:20,    step:'1',   placeholder:'örn: 1',   hint:'Tüm eventlerde eş zamanlı açık kalabilecek maksimum pozisyon sayısı.' },
+];
+
+// Bölüm grupları — modal'da ve confirm popup'ta kullanılır
+const AS_SECTIONS = [
+  { label: 'Giriş Koşulları', keys: ['min_entry_price','max_entry_price','time_rule_threshold','min_entry_seconds','min_move_delta','max_slippage_pct'] },
+  { label: 'Çıkış Stratejisi', keys: ['target_exit_pct','stop_loss_pct','force_sell_before_resolution_seconds','sell_retry_count'] },
+  { label: 'Limitler',         keys: ['order_amount','event_trade_limit','max_open_positions'] },
 ];
 
 // Kullanıcı 0-100 (%) girer → backend'e 0-1 olarak gönderilir (÷100)
 // Kullanıcı 0-1 olan değeri okurken → 0-100 olarak gösterilir (×100)
 const _pctFields = new Set([
-  'min_entry_price','max_entry_price','target_exit_price','stop_loss_price',
-  'min_move_delta','max_slippage_pct'
+  'min_entry_price','max_entry_price','target_exit_pct','stop_loss_pct',
+  'max_slippage_pct'
 ]);
 
 function openAssetSettings(key) {
@@ -971,57 +1227,81 @@ function openAssetSettings(key) {
 
   const saved = state.assetSettings[key] || null; // null = henüz ayar yok
   const tf   = a.timeframe || key.split('_').slice(1).join('_') || '5M';
-  const tfLabel = {'5M':'5 Dakika','15M':'15 Dakika','1H':'1 Saat','4H':'4 Saat','1D':'1 Gün'}[tf] || tf;
+  const tfLabel = {'5M':'5 Dk','15M':'15 Dk','1H':'1 Sa','4H':'4 Sa','1D':'1 Gün'}[tf] || tf;
 
-  // Alan oluşturucu — kayıtlı değer varsa göster, yoksa sadece placeholder
+  // Alan satırı oluşturucu — compact yatay layout
   const fld = (f) => {
+    if (!f) return '';
     let raw = saved ? saved[f.key] : undefined;
     const hasVal = raw !== undefined && raw !== null && raw !== '';
-    // % alanlar: backend 0-1 saklar, kullanıcıya 0-100 gösterilir (0.76 → 76)
-    const dispVal = (hasVal && _pctFields.has(f.key))
-      ? (Number(raw) * 100).toFixed(Number(raw) % 1 === 0 ? 0 : 1)
-      : (hasVal ? raw : '');
-    return `<div class="as-field">
-      <label class="as-label">${f.label} <span class="as-unit">${f.unit}</span></label>
-      <input class="as-input${hasVal ? ' has-value' : ''}"
-             id="esf-${key}-${f.key}"
-             type="number"
-             step="${f.step || 'any'}"
-             min="${f.min ?? ''}"
-             max="${f.max ?? ''}"
-             value="${dispVal}"
-             placeholder="${f.placeholder}"
-             oninput="onEventSettingInput('${key}')" />
-      <span class="as-hint">${f.min !== undefined ? `[${f.min}–${f.max}] ` : ''}${f.hint}</span>
+    let dispVal;
+    if (hasVal && _pctFields.has(f.key)) {
+      dispVal = (Number(raw) * 100).toFixed(Number(raw) % 1 === 0 ? 0 : 1);
+    } else if (hasVal && f.key === 'min_move_delta' && Number(raw) < 1) {
+      dispVal = ''; raw = undefined;
+    } else {
+      dispVal = hasVal ? raw : '';
+    }
+    return `<div class="as-row">
+      <div class="as-row-meta">
+        <span class="as-row-name">${f.label}</span>
+        <span class="as-row-range">${f.min}–${f.max} ${f.unit}</span>
+      </div>
+      <div class="as-row-ctrl">
+        <div class="as-tip-wrap"><span class="as-tip" data-tip="${f.hint.replace(/"/g,"'")}">?</span><div class="as-tip-popup">${f.hint}</div></div>
+        <input class="as-input${hasVal ? ' has-value' : ''}"
+               id="esf-${key}-${f.key}"
+               type="number"
+               step="${f.step || 'any'}"
+               min="${f.min ?? ''}"
+               max="${f.max ?? ''}"
+               value="${dispVal}"
+               placeholder="${f.placeholder}"
+               oninput="onEventSettingInput('${key}')" />
+        <span class="as-row-unit">${f.unit}</span>
+      </div>
     </div>`;
   };
+
+  // Seksiyonları oluştur
+  const sectionsHTML = AS_SECTIONS.map(sec => `
+    <div class="as-section">
+      <div class="as-section-hdr">${sec.label}</div>
+      <div class="as-rows">
+        ${sec.keys.map(k => fld(EVENT_SETTING_FIELDS.find(f => f.key === k))).join('')}
+      </div>
+    </div>`).join('');
 
   const isNew = !saved;
   const body = `
 <div class="as-modal" id="as-modal-${key}">
   <div class="as-header">
     <div class="as-icon" style="background:${a.color}22;color:${a.color};">${a.icon}</div>
-    <div>
-      <div class="as-title">${a.name} · ${tfLabel} — Strateji Ayarları</div>
-      <div class="as-sub${isNew ? ' as-sub-new' : ''}">
-        ${isNew
-          ? '⚠️ Bu event için henüz ayar kaydedilmemiş. Ayarlarınızı kaydetmeden bot bu event\'te işlem açamaz. Tüm alanları doldurun.'
-          : '✏️ Bu event\'e özel ayarlar aktif. Değiştirip kaydedebilir veya Temizle ile silebilirsiniz.'}
-      </div>
+    <div style="flex:1;">
+      <div class="as-title">${a.name} <span style="opacity:.5;font-weight:400;">·</span> ${tfLabel}</div>
+      <div class="as-sub">Strateji Ayarları</div>
     </div>
+    ${isNew ? '<div class="as-badge-new">YENİ</div>' : ''}
   </div>
-  <div class="as-grid">
-    ${EVENT_SETTING_FIELDS.map(f => fld(f)).join('')}
-  </div>
+  ${isNew ? '<div class="as-alert-new">⚠️ Bu event için henüz ayar yok. Tüm alanları doldurun.</div>' : ''}
+  ${sectionsHTML}
   <div class="as-actions">
     ${!isNew ? `<button class="as-btn-reset" onclick="clearEventSettings('${key}')">🗑 Temizle</button>` : '<div></div>'}
-    <div class="as-save-area">
+    <div class="as-save-area" style="display:flex;flex-direction:column;gap:8px;align-items:flex-end;">
       <span class="as-save-msg" id="esf-msg-${key}"></span>
-      <button class="as-btn-save" id="esf-save-${key}"
-              onclick="saveEventSettings('${key}')"
-              ${isNew ? 'disabled' : ''}>
-        ${isNew ? 'Kaydet (tüm alanları doldurun)' : 'Kaydet'}
-      </button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
+        <button class="as-btn-cancel" onclick="closePageModal()">İptal</button>
+        <button class="as-btn-save-only" id="esf-save-only-${key}"
+                onclick="saveEventSettings('${key}', false)"
+                ${isNew ? 'disabled' : ''}>
+          Kaydet
+        </button>
+        <button class="as-btn-save" id="esf-save-${key}"
+                onclick="saveEventSettings('${key}', true)"
+                ${isNew ? 'disabled' : ''}>
+          💸 Kaydet ve İşlem Aç
+        </button>
+      </div>
     </div>
   </div>
 </div>`;
@@ -1041,6 +1321,7 @@ function openAssetSettings(key) {
 // Kullanıcı alan doldurunca kaydet butonunu aktifleştir/pasifleştir
 function onEventSettingInput(key) {
   const btn = document.getElementById(`esf-save-${key}`);
+  const btnOnly = document.getElementById(`esf-save-only-${key}`);
   if (!btn) return;
   let allValid = true;
   EVENT_SETTING_FIELDS.forEach(f => {
@@ -1060,12 +1341,43 @@ function onEventSettingInput(key) {
     }
   });
   btn.disabled = !allValid;
-  btn.textContent = allValid ? 'Kaydet' : 'Kaydet (alanları kontrol edin)';
+  if (btnOnly) btnOnly.disabled = !allValid;
+  if (allValid) {
+    btn.textContent = '💸 Kaydet ve İşlem Aç';
+    if (btnOnly) btnOnly.textContent = 'Kaydet ama İşlem Açma';
+  } else {
+    btn.textContent = '💸 Kaydet ve İşlem Aç (alanları kontrol edin)';
+    if (btnOnly) btnOnly.textContent = 'Kaydet ama İşlem Açma (alanları kontrol edin)';
+  }
 }
 
-async function saveEventSettings(key) {
+// ─── Custom Confirm Popup ──────────────────────────────────────────────────────
+function showConfirmPopup({ title, body, confirmText = 'Onayla', cancelText = 'İptal', isTrading = false, onConfirm, onCancel }) {
+  const existing = document.getElementById('cf-popup-overlay');
+  if (existing) existing.remove();
+
+  const el = document.createElement('div');
+  el.id = 'cf-popup-overlay';
+  el.className = 'cf-overlay';
+  el.innerHTML = `
+    <div class="cf-popup">
+      <div class="cf-title">${title}</div>
+      <div class="cf-body">${body}</div>
+      <div class="cf-actions">
+        <button class="cf-btn-cancel">${cancelText}</button>
+        <button class="cf-btn-confirm${isTrading ? ' trade' : ''}">${confirmText}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(el);
+
+  el.querySelector('.cf-btn-cancel').onclick = () => { el.remove(); if (onCancel) onCancel(); };
+  el.querySelector('.cf-btn-confirm').onclick = () => { el.remove(); if (onConfirm) onConfirm(); };
+  el.addEventListener('click', e => { if (e.target === el) { el.remove(); if (onCancel) onCancel(); } });
+}
+
+async function saveEventSettings(key, startTrading = false) {
   const msg = document.getElementById(`esf-msg-${key}`);
-  const btn = document.getElementById(`esf-save-${key}`);
+  const a = state.assets[key] || {};
 
   // Değerleri topla
   const payload = {};
@@ -1075,7 +1387,7 @@ async function saveEventSettings(key) {
     if (!el || el.value.trim() === '') { valid = false; return; }
     let v = parseFloat(el.value);
     if (isNaN(v)) { valid = false; return; }
-    if (_pctFields.has(f.key)) v = v / 100; // % → decimal
+    if (_pctFields.has(f.key)) v = v / 100;
     payload[f.key] = v;
   });
 
@@ -1084,65 +1396,106 @@ async function saveEventSettings(key) {
     return;
   }
 
+  // Custom confirm popup — gruplu özet tablo
+  const tableRows = AS_SECTIONS.map(sec => {
+    const rows = sec.keys.map(fkey => {
+      const f = EVENT_SETTING_FIELDS.find(x => x.key === fkey);
+      if (!f) return '';
+      let val = payload[f.key];
+      if (_pctFields.has(f.key)) val = (val * 100).toFixed(1).replace(/\.0$/, '');
+      else val = (val !== undefined && val !== null) ? val : '—';
+      return `<tr><td class="cf-td-label">${f.label}</td><td class="cf-td-val">${val} <span class="cf-td-unit">${f.unit}</span></td></tr>`;
+    }).join('');
+    return `<tr class="cf-sec-row"><td colspan="2">${sec.label}</td></tr>${rows}`;
+  }).join('');
+
+  const bodyHTML = `<table class="cf-table">${tableRows}</table>`;
+  const title = startTrading
+    ? `<span style="color:var(--accent-green)">💸</span> ${a.name || key} — Kaydet ve İşlem Aç`
+    : `<span style="color:var(--accent-purple)">✅</span> ${a.name || key} — Kaydet`;
+
+  showConfirmPopup({
+    title,
+    body: bodyHTML,
+    confirmText: startTrading ? '💸 Onayla ve İşlem Aç' : '✅ Kaydet',
+    cancelText: 'İptal',
+    isTrading: startTrading,
+    onConfirm: () => _doSaveEventSettings(key, startTrading, payload),
+  });
+}
+
+async function _doSaveEventSettings(key, startTrading, payload) {
+  const msg = document.getElementById(`esf-msg-${key}`);
+  const btn = document.getElementById(`esf-save-${key}`);
+
   if (btn) { btn.disabled = true; btn.textContent = 'Kaydediliyor...'; }
   if (msg) { msg.textContent = ''; msg.className = 'as-save-msg'; }
 
   try {
-    const res  = await fetch(`/api/settings/${encodeURIComponent(key)}`, {
+    const res = await fetch(`/api/settings/${encodeURIComponent(key)}`, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify(payload),
     });
     const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || 'Sunucu hatası');
 
-    if (!res.ok || !data.ok) {
-      throw new Error(data.error || 'Sunucu hatası');
-    }
-
-    // Doğrulama: dönen veriyi kontrol et
     const returned = data.settings || {};
-    const mismatches = EVENT_SETTING_FIELDS.filter(f => {
-      const sent = _pctFields.has(f.key) ? payload[f.key] : payload[f.key];
-      return Math.abs((returned[f.key] || 0) - (sent || 0)) > 0.0001;
-    });
+    const mismatches = EVENT_SETTING_FIELDS.filter(f =>
+      Math.abs((returned[f.key] || 0) - (payload[f.key] || 0)) > 0.0001
+    );
+    if (mismatches.length > 0) throw new Error(`Kayıt doğrulanamadı (${mismatches.map(f=>f.label).join(', ')})`);
 
-    if (mismatches.length > 0) {
-      throw new Error(`Kayıt doğrulanamadı (${mismatches.map(f=>f.label).join(', ')})`);
-    }
-
-    // Başarılı — state güncelle, modalı kapat
     state.assetSettings[key] = returned;
+
+    if (startTrading) {
+      if (!state.pinned.includes(key)) {
+        state.pinned = [...state.pinned, key];
+        wsSend({ type: 'toggle_pin', asset: key });
+        fetch(`/api/assets/${key}/pin`, { method: 'POST' }).catch(() => {});
+      }
+    }
+    // _cardNotifications temizle — buildEventCard state'den hesaplar artık
+    delete state._cardNotifications[key];
+
     if (msg) { msg.textContent = '✓ Kaydedildi'; msg.className = 'as-save-msg ok'; }
     setTimeout(() => {
       closePageModal();
+      _chipsBuilt = false;
       _lastRenderKey = '';
       renderEventsList();
     }, 800);
 
   } catch(e) {
     if (msg) { msg.textContent = `❌ ${e.message}`; msg.className = 'as-save-msg err'; }
-    if (btn) { btn.disabled = false; btn.textContent = 'Tekrar Dene'; }
+    if (btn) { btn.disabled = false; btn.textContent = '💸 Kaydet ve İşlem Aç'; }
   }
 }
 
 async function clearEventSettings(key) {
   const a = state.assets[key] || {};
   const label = a.name ? `${a.name} (${key})` : key;
-  const confirmed = confirm(`"${label}" event ayarları silinecek.\nBot bu event için global ayarları kullanmaya başlayacak.\n\nDevam edilsin mi?`);
-  if (!confirmed) return;
-
-  try {
-    const res  = await fetch(`/api/settings/${encodeURIComponent(key)}`, { method: 'DELETE' });
-    const data = await res.json();
-    if (!res.ok || !data.ok) throw new Error(data.error || 'Silinemedi');
-
-    delete state.assetSettings[key];
-    closePageModal();
-    _lastRenderKey = '';
-    renderEventsList();
-  } catch(e) {
-    alert(`Temizlenemedi: ${e.message}`);
-  }
+  showConfirmPopup({
+    title: '🗑 Ayarları Temizle',
+    body: `<p style="color:var(--text-secondary);font-size:13px;margin:0 0 4px;">"<b>${label}</b>" event ayarları silinecek.</p>
+           <p style="color:var(--text-muted);font-size:12px;margin:0;">Bot bu event için işlem açamayacak.</p>`,
+    confirmText: 'Temizle',
+    cancelText: 'İptal',
+    onConfirm: async () => {
+      try {
+        const res  = await fetch(`/api/settings/${encodeURIComponent(key)}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.error || 'Silinemedi');
+        delete state.assetSettings[key];
+        delete state._cardNotifications[key];
+        closePageModal();
+        _lastRenderKey = '';
+        renderEventsList();
+      } catch(e) {
+        showToast(`Temizlenemedi: ${e.message}`, 'error');
+      }
+    },
+  });
 }
 
 // ─── Expanded Body ────────────────────────
@@ -1598,18 +1951,46 @@ function selectAsset(sym) {
 }
 
 function togglePin(key) {
-  // key = "BTC_5M" veya "BTC" — event bazlı pin/unpin
-  // Pinned listesi key bazlı (event bazlı) tutuluyor
   const pinned = new Set(state.pinned);
-  if (pinned.has(key)) pinned.delete(key);
-  else                 pinned.add(key);
+  const isCurrentlyPinned = pinned.has(key);
+
+  if (!isCurrentlyPinned) {
+    // $ butonuna basarak İşlem Açılacaklar'a ekleme — ayar kontrolü
+    const a = state.assets[key];
+    const hasSettings = !!(state.assetSettings[key]);
+    const settingsConfigured = a?.settings_configured !== false;
+    if (!hasSettings && !settingsConfigured) {
+      showToast('Bu event için henüz ayar yapılmamış!', 'warn');
+      // Kullanıcıyı bilgilendirip ayar modalını aç
+      const go = confirm(
+        `⚠️ "${a?.name || key}" için ayar yapılmamış.\n\n` +
+        `Bot bu event'te işlem açamaz.\n\n` +
+        `Şimdi ayarları yapmak ister misiniz?\n` +
+        `(Ayar sayfasında "💸 Kaydet ve İşlem Aç" seçeneğini kullanın)`
+      );
+      if (go) openAssetSettings(key);
+      return;
+    }
+    pinned.add(key);
+  } else {
+    pinned.delete(key);
+    // İşlem Açılacaklar'dan çıkarılınca bildirim temizle
+    if (state._cardNotifications) delete state._cardNotifications[key];
+  }
+
   state.pinned = [...pinned];
   wsSend({ type: 'toggle_pin', asset: key });
   fetch(`/api/assets/${key}/pin`, { method: 'POST' }).catch(() => {});
-  addLog('info', `${key} ${pinned.has(key) ? 'takibe alındı' : 'takipten çıkarıldı'}`);
+  addLog('info', `${key} ${pinned.has(key) ? 'işlem açılacaklara eklendi' : 'işlem açılacaklardan çıkarıldı'}`);
   _chipsBuilt = false;
   _lastRenderKey = '';
   renderEventsList();
+}
+
+function pinAndOpenSettings(key) {
+  // Untracked event "Ayarlar" butonu: sadece ayar modalını aç, pin yapmadan.
+  // Pinleme saveEventSettings içinde "Kaydet ve İşlem Aç" seçilince yapılır.
+  openAssetSettings(key);
 }
 
 async function closePosition(posId) {
@@ -1691,9 +2072,7 @@ async function saveTrade() {
 
 async function saveSettings() {
   const s = {
-    mode:                  document.getElementById('cfg-mode')?.value || 'PAPER',
     btc_price_source:      document.getElementById('cfg-btc-source')?.value || 'BINANCE',
-    port:                  numVal('cfg-port'),
     auto_start:            checkVal('cfg-auto-start'),
     notifications_enabled: checkVal('cfg-notifications'),
   };
@@ -1722,6 +2101,29 @@ function saveWallet() {
   if (!pk || !apiKey || !secret || !passphrase) {
     showToast('Lütfen zorunlu tüm alanları doldurun (Private Key, API Key, Secret, Passphrase)', 'warn');
     return;
+  }
+
+  // Character count validation
+  const warnings = [];
+  if (pk.length < 60 || pk.length > 70) {
+    warnings.push(`• Private Key: ${pk.length} karakter (beklenen ~64)`);
+  }
+  if (apiKey.length < 30 || apiKey.length > 50) {
+    warnings.push(`• API Key: ${apiKey.length} karakter (beklenen ~36 UUID)`);
+  }
+  if (secret.length < 30 || secret.length > 60) {
+    warnings.push(`• Secret: ${secret.length} karakter (beklenen ~44 Base64)`);
+  }
+  if (passphrase.length > 0 && passphrase.length < 8) {
+    warnings.push(`• Passphrase: ${passphrase.length} karakter (çok kısa, min 8)`);
+  }
+  if (funder.length > 0 && !funder.startsWith('0x')) {
+    warnings.push(`• Funder Adresi: "0x" ile başlamalı`);
+  }
+
+  if (warnings.length > 0) {
+    const proceed = confirm(`⚠️ Bazı alanlar beklenenden farklı görünüyor:\n\n${warnings.join('\n')}\n\nDevam etmek için Tamam, düzeltmek için İptal.`);
+    if (!proceed) return;
   }
 
   fetch('/api/wallet/save', {
@@ -1876,8 +2278,6 @@ function openPageModal(page) {
       chk('cfg-auto-claim',     s.auto_claim);
       chk('cfg-one-per-event',  s.one_trade_per_event !== undefined ? s.one_trade_per_event : true);
       // Genel
-      set('cfg-mode',           s.mode);
-      set('cfg-port',           s.port);
       chk('cfg-auto-start',    s.auto_start);
       chk('cfg-notifications', s.notifications_enabled !== undefined ? s.notifications_enabled : true);
     }).catch(() => {});
@@ -2026,6 +2426,38 @@ function formatAssetPrice(sym, price) {
   return `$${p.toFixed(5)}`;
 }
 
+async function toggleBrowserNotifPermission(checkbox) {
+  if (!('Notification' in window)) {
+    showToast('Bu tarayıcı bildirimleri desteklemiyor', 'error');
+    if (checkbox) checkbox.checked = false;
+    return;
+  }
+  if (checkbox && checkbox.checked) {
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') {
+      showToast('Tarayıcı bildirimi izni reddedildi', 'warn');
+      checkbox.checked = false;
+    } else {
+      showToast('Tarayıcı bildirimleri aktif ✓', 'success');
+    }
+  }
+}
+
+function sendBrowserNotif(title, body, type) {
+  if (Notification.permission !== 'granted') return;
+  const enabled = document.getElementById('cfg-browser-notif')?.checked;
+  if (!enabled) return;
+  const typeChecks = {
+    'trade-open':  'cfg-bn-trade-open',
+    'trade-close': 'cfg-bn-trade-close',
+    'rules-pass':  'cfg-bn-rules-pass',
+    'errors':      'cfg-bn-errors',
+  };
+  const checkId = typeChecks[type];
+  if (checkId && document.getElementById(checkId)?.checked === false) return;
+  try { new Notification(title, { body, silent: false }); } catch(e) {}
+}
+
 // ═══════════════════════════════════════════
 // INIT
 // ═══════════════════════════════════════════
@@ -2103,6 +2535,17 @@ document.addEventListener('DOMContentLoaded', () => {
       const dd   = document.getElementById('notif-dropdown');
       const bell = document.getElementById('notif-bell');
       if (dd)   dd.style.display = 'none';
+      if (bell) bell.classList.remove('active');
+    }
+  });
+
+  // Bell: close on outside click
+  document.addEventListener('click', (e) => {
+    if (state.notifOpen && !e.target.closest('#notif-bell') && !e.target.closest('#notif-dropdown')) {
+      state.notifOpen = false;
+      const dd = document.getElementById('notif-dropdown');
+      const bell = document.getElementById('notif-bell');
+      if (dd) dd.style.display = 'none';
       if (bell) bell.classList.remove('active');
     }
   });

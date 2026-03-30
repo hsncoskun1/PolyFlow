@@ -4,7 +4,8 @@
     {
       "name": "polyflow",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["backend/main.py"],
+      "runtimeArgs": ["D:/POLYFLOW/backend/main.py"],
+      "cwd": "D:/POLYFLOW",
       "port": 8002
     }
   ]
