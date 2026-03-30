@@ -622,7 +622,7 @@ function updateCardsInPlace(keys) {
         mainTxt = `${timeMinStr} │ ${cdStr} │ ${timeMaxStr}`;
       } else if (key === 'price') {
         status  = rules.price || 'waiting';
-        mainTxt = `↑${upPct}% ↓${dnPct}%`;
+        mainTxt = `↑${upPct}% │ ↓${dnPct}%`;
       } else if (key === 'move') {
         status  = rules.btc_move || 'waiting';
         mainTxt = `Δ ${moveStr}`;
@@ -650,7 +650,7 @@ function updateCardsInPlace(keys) {
     }).length;
     const allPass    = passCount === 6;
     const countColor = allPass ? 'all-pass' : passCount >= 4 ? 'waiting' : 'has-fail';
-    const countDiv   = card.querySelector('.eac-rule-count');
+    const countDiv   = card.querySelector('.eac-hdr-mid .eac-rule-count');
     if (countDiv) {
       countDiv.className = `eac-rule-count ${countColor}`;
       const numEl = countDiv.querySelector('.eac-rule-count-num');
@@ -797,11 +797,13 @@ function renderEventCard(key) {
   const timeMax    = st.time_rule_threshold || 90;
   const timeMinStr = timeMin < 60 ? `${timeMin}sn` : `${Math.floor(timeMin/60)}:${String(timeMin%60).padStart(2,'0')}dk`;
   const timeMaxStr = timeMax < 60 ? `${timeMax}sn` : `${Math.floor(timeMax/60)}:${String(timeMax%60).padStart(2,'0')}dk`;
-  const priceRangeStr = `${(st.min_entry_price||0.75).toFixed(2)}–${(st.max_entry_price||0.98).toFixed(2)}`;
+  const priceRangeStr = `${((st.min_entry_price||0.75)*100).toFixed(0)}–${((st.max_entry_price||0.98)*100).toFixed(0)}%`;
 
   const movePct    = refPrice > 0 ? (priceDiff / refPrice * 100) : 0;
   const moveStr    = (movePct >= 0 ? '+' : '') + movePct.toFixed(2) + '%';
-  const minMoveStr = formatAssetPrice(sym, st.min_btc_move_up || 70);
+  const minMoveStr = st.min_move_delta != null
+    ? `Min %${(st.min_move_delta * 100).toFixed(2)}`
+    : `Min $${(st.min_btc_move_up || 70).toFixed(0)}`;
 
   const spreadVal = (mp.slippage_pct || 0).toFixed(2) + '%';
   const spreadMax = ((st.max_slippage_pct || 0.03) * 100).toFixed(0) + '%';
@@ -840,7 +842,7 @@ function renderEventCard(key) {
 <div class="eac ${hasPos ? 'has-position' : ''} ${isUntracked ? 'untracked' : ''}" id="eac-${key}" ${dragAttrs}>
   <div class="eac-hdr">
 
-    <!-- SOL: ikon + isim + 5DK + pin + canli -->
+    <!-- SOL: ikon + isim + 5DK + pin -->
     <div class="eac-hdr-left">
       <div class="eac-icon" style="background:${a.color}22;color:${a.color};">${a.icon}</div>
       <div class="eac-hdr-text">
@@ -853,7 +855,6 @@ function renderEventCard(key) {
           <button class="pin-btn pin-btn-title ${pinned ? 'pinned' : ''}"
             onclick="event.stopPropagation(); togglePin('${key}')"
             title="${pinned ? 'Takipten çıkar' : 'Takibe al'}">${pinned ? '📌' : '📍'}</button>
-          ${liveBadge}
           ${hasPos ? '<span class="badge-pos">●</span>' : ''}
           ${(allPass && state.botRunning && pinned) ? '<span class="badge-ready">AL</span>' : ''}
         </div>
@@ -865,63 +866,62 @@ function renderEventCard(key) {
       </div>
     </div>
 
-    <!-- SAG: kurallar -->
-    <div class="eac-hdr-right">
+    <!-- ORTA: canli badge + ayar uyarısı + 0/6 sayacı -->
+    <div class="eac-hdr-mid">
+      ${liveBadge}
+      ${!settingsConfigured ? '<span class="eac-no-settings-warn">Ayar yapmadan işlem açılamaz</span>' : ''}
+      <div class="eac-rule-count ${countColor}" title="Kural durumu">
+        <span class="eac-rule-count-num">${passCount}/6</span>
+      </div>
+    </div>
 
-      ${isUntracked
-        ? `<div class="eac-noconfig-block">
-             <span class="eac-noconfig-msg">Ayar Yok — Takibe Al</span>
-             <div class="eac-hdr-gap"></div>
-             <button class="eac-settings-quick" onclick="event.stopPropagation(); togglePin('${key}'); openAssetSettings('${key}')" title="Takibe al ve ayar yap">Ayarlar</button>
-           </div>`
-        : `${pos
-            ? `<span class="eac-pnl-inline ${(pos.pnl||0)>=0?'pos':'neg'}" title="Acik pozisyon P&L">${(pos.pnl||0)>=0?'+':''}${formatUSD(pos.pnl)}</span><div class="eac-rb-sep"></div>`
-            : ''
-          }
-          <div class="eac-rule-count ${countColor}" title="Kural durumu">
-            <span class="eac-rule-count-num">${passCount}/6</span>
-          </div>
-          <div class="eac-rb-sep"></div>
-          <div class="eac-rb rb-${timeStatus}" data-rb="time" title="Zaman: ${timeMinStr}–${timeMaxStr}">
-            <span class="eac-rb-main">${timeMinStr} │ ${cdStr} │ ${timeMaxStr}</span>
-            <span class="eac-rb-sub">Min │ Kalan │ Max</span>
-          </div>
-          <div class="eac-rb-sep"></div>
-          <div class="eac-rb rb-${priceStatus}" data-rb="price" title="Entry: ${priceRangeStr}">
-            <span class="eac-rb-main">↑${upPct}% ↓${dnPct}%</span>
-            <span class="eac-rb-sub">${priceRangeStr}</span>
-          </div>
-          <div class="eac-rb-sep"></div>
-          <div class="eac-rb rb-${moveStatus}" data-rb="move" title="Min: ${minMoveStr}">
-            <span class="eac-rb-main">Δ ${moveStr}</span>
-            <span class="eac-rb-sub">${minMoveStr}</span>
-          </div>
-          <div class="eac-rb-sep"></div>
-          <div class="eac-rb rb-${spreadStatus}" data-rb="slip"
-            title="${spreadDisabled ? 'Devre dışı' : `Anlık: ${spreadVal} / Max: ${spreadMax}`}">
-            ${spreadDisabled
-              ? `<span class="eac-rb-main"><span class="eac-rb-deaktif">DEAKTIF</span></span><span class="eac-rb-sub">Spread</span>`
-              : `<span class="eac-rb-main">${spreadVal}</span><span class="eac-rb-sub">Max ${spreadMax}</span>`}
-          </div>
-          <div class="eac-rb-sep"></div>
-          <div class="eac-rb rb-${elStatus}" data-rb="event-limit" title="Event başına max: ${assetPosCnt}/${eTradeLim}">
-            <span class="eac-rb-main">${assetPosCnt}/${eTradeLim}</span>
-            <span class="eac-rb-sub">Olay Maks</span>
-          </div>
-          <div class="eac-rb-sep"></div>
-          <div class="eac-rb rb-${mpStatus}" data-rb="max-pos" title="Aç. pos: ${posCount}/${maxOpenPos}">
-            <span class="eac-rb-main">${posCount}/${maxOpenPos}</span>
-            <span class="eac-rb-sub">Bot Maks</span>
-          </div>
-          <div class="eac-hdr-gap"></div>
-          ${pinned
-            ? `<button class="eac-settings-quick${!settingsConfigured ? ' needs-settings' : hasCustomSettings ? ' custom' : ''}"
-                 onclick="event.stopPropagation(); openAssetSettings('${key}')"
-                 title="${!settingsConfigured ? '⚠️ Ayar gerekli — bot bu event\'te işlem açamaz!' : hasCustomSettings ? 'Özel ayar aktif' : 'Bu event için ayar yap'}">
-                 ${!settingsConfigured ? '⚠️ Ayar Gerekli' : hasCustomSettings ? 'Ayarlar ✦' : 'Ayarlar'}
-               </button>`
-            : ''
-          }`
+    <!-- SAG: kurallar (her zaman gösterilir) -->
+    <div class="eac-hdr-right">
+      ${pos
+        ? `<span class="eac-pnl-inline ${(pos.pnl||0)>=0?'pos':'neg'}" title="Acik pozisyon P&L">${(pos.pnl||0)>=0?'+':''}${formatUSD(pos.pnl)}</span><div class="eac-rb-sep"></div>`
+        : ''
+      }
+      <div class="eac-rb rb-${timeStatus}" data-rb="time" title="Zaman: ${timeMinStr}–${timeMaxStr}">
+        <span class="eac-rb-main">${timeMinStr} │ ${cdStr} │ ${timeMaxStr}</span>
+        <span class="eac-rb-sub">Min │ Kalan │ Max</span>
+      </div>
+      <div class="eac-rb-sep"></div>
+      <div class="eac-rb rb-${priceStatus}" data-rb="price" title="Entry: ${priceRangeStr}">
+        <span class="eac-rb-main">↑${upPct}% │ ↓${dnPct}%</span>
+        <span class="eac-rb-sub">${priceRangeStr}</span>
+      </div>
+      <div class="eac-rb-sep"></div>
+      <div class="eac-rb rb-${moveStatus}" data-rb="move" title="Min: ${minMoveStr}">
+        <span class="eac-rb-main">Δ ${moveStr}</span>
+        <span class="eac-rb-sub">${minMoveStr}</span>
+      </div>
+      <div class="eac-rb-sep"></div>
+      <div class="eac-rb rb-${spreadStatus}" data-rb="slip"
+        title="${spreadDisabled ? 'Devre dışı' : `Anlık: ${spreadVal} / Max: ${spreadMax}`}">
+        ${spreadDisabled
+          ? `<span class="eac-rb-main"><span class="eac-rb-deaktif">DEAKTIF</span></span><span class="eac-rb-sub">Spread</span>`
+          : `<span class="eac-rb-main">${spreadVal}</span><span class="eac-rb-sub">Max ${spreadMax}</span>`}
+      </div>
+      <div class="eac-rb-sep"></div>
+      <div class="eac-rb rb-${elStatus}" data-rb="event-limit" title="Event başına max: ${assetPosCnt}/${eTradeLim}">
+        <span class="eac-rb-main">${assetPosCnt}/${eTradeLim}</span>
+        <span class="eac-rb-sub">Olay Maks</span>
+      </div>
+      <div class="eac-rb-sep"></div>
+      <div class="eac-rb rb-${mpStatus}" data-rb="max-pos" title="Aç. pos: ${posCount}/${maxOpenPos}">
+        <span class="eac-rb-main">${posCount}/${maxOpenPos}</span>
+        <span class="eac-rb-sub">Bot Maks</span>
+      </div>
+      <div class="eac-hdr-gap"></div>
+      ${pinned
+        ? `<button class="eac-settings-quick${!settingsConfigured ? ' needs-settings' : hasCustomSettings ? ' custom' : ''}"
+               onclick="event.stopPropagation(); openAssetSettings('${key}')"
+               title="${!settingsConfigured ? '⚠️ Ayar gerekli — bot bu event\'te işlem açamaz!' : hasCustomSettings ? 'Özel ayar aktif' : 'Bu event için ayar yap'}">
+               ${!settingsConfigured ? '⚠️ Ayar Gerekli' : hasCustomSettings ? 'Ayarlar ✦' : 'Ayarlar'}
+             </button>`
+        : `<button class="eac-settings-quick untracked-add"
+               onclick="event.stopPropagation(); togglePin('${key}')"
+               title="Takibe al">📍</button>`
       }
     </div>
 
