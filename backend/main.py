@@ -1,8 +1,9 @@
-"""POLYFLOW - Main FastAPI Server v1.3 (CLOB WebSocket + Gamma Market Scan)"""
+"""POLYFLOW - Main FastAPI Server v1.4 (CLOB WebSocket + Gamma Market Scan + PTB)"""
 import asyncio
 import json
 import logging
 import math
+import re
 import random
 import time
 from datetime import datetime
@@ -211,6 +212,7 @@ async def simulation_tick():
                     "has_position": any(p.get("asset") == sym for p in app_state["positions"]),
                     "phase":        _asset_phases.get(sym, "entry"),
                     "slug":         real.get("slug", ""),
+                    "ptb":          get_ptb(key),
                 }
 
             app_state["assets"] = asset_states
@@ -583,6 +585,146 @@ def _init_single_asset(sym: str):
     _asset_phase_ticks[sym] = 0
 
 
+# ─── PTB (Price to Beat) YÖNETİCİSİ ─────────────────────────────────────────
+# Her event icin acilis referans fiyatini (openPrice) cekerler.
+# Kaynak 1: Gamma API events endpoint → eventMetadata.priceToBeat
+# Kaynak 2: __NEXT_DATA__ scraping → openPrice (fallback)
+# PTB bir kez kilitlenir ve event boyunca degismez.
+
+_ptb_cache: dict[str, float] = {}      # key (BTC_5M) → openPrice
+_ptb_locked: dict[str, bool] = {}      # key → kilitlendi mi
+_ptb_task = None
+
+# Coin isimleri → RTDS subscription (canli fiyat icin)
+RTDS_SYMBOLS = {
+    "BTC": "btc/usd", "ETH": "eth/usd", "SOL": "sol/usd",
+    "XRP": "xrp/usd", "DOGE": "doge/usd", "BNB": "bnb/usd", "HYPE": "hype/usd",
+}
+
+# Variant map (TF → Polymarket past-results variant)
+PTB_VARIANT = {
+    "5M": "fiveminute", "15M": "fifteen", "1H": "hourly",
+    "4H": "fourhour", "1D": "daily",
+}
+
+
+async def _fetch_ptb_gamma(slug: str) -> float | None:
+    """Gamma API events endpoint'inden eventMetadata.priceToBeat cek."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{GAMMA_BASE}/events", params={"slug": slug})
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+            if not data:
+                return None
+            ev = data[0] if isinstance(data, list) else data
+            metadata = ev.get("eventMetadata")
+            if metadata:
+                if isinstance(metadata, str):
+                    try: metadata = json.loads(metadata)
+                    except: return None
+                ptb = metadata.get("priceToBeat")
+                if ptb and float(ptb) > 0:
+                    return round(float(ptb), 2)
+    except Exception as e:
+        logger.warning(f"Gamma PTB hatasi ({slug}): {e}")
+    return None
+
+
+async def _fetch_ptb_next_data(slug: str, symbol: str, variant: str) -> float | None:
+    """Polymarket event sayfasindan __NEXT_DATA__ ile openPrice cek."""
+    try:
+        url = f"https://polymarket.com/event/{slug}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
+            "Accept": "text/html",
+        }
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            resp = await client.get(url, headers=headers)
+            if resp.status_code != 200:
+                return None
+            html = resp.text
+
+        match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL)
+        if not match:
+            return None
+
+        root = json.loads(match.group(1))
+        queries = root.get("props", {}).get("pageProps", {}).get("dehydratedState", {}).get("queries", [])
+
+        for q in queries:
+            key = q.get("queryKey", [])
+            if (len(key) >= 5 and key[0] == "crypto-prices" and key[1] == "price"
+                    and str(key[2]).upper() == symbol.upper()
+                    and key[4] == variant):
+                data = q.get("state", {}).get("data")
+                if isinstance(data, dict):
+                    op = data.get("openPrice")
+                    cp = data.get("closePrice")
+                    # Sadece aktif candle (closePrice=None)
+                    if op and cp is None:
+                        return round(float(op), 2)
+    except Exception as e:
+        logger.warning(f"__NEXT_DATA__ PTB hatasi ({slug}): {e}")
+    return None
+
+
+def get_ptb(key: str) -> float:
+    """Belirli event key'i icin PTB degerini don."""
+    return _ptb_cache.get(key, 0.0)
+
+
+async def _ptb_loop():
+    """Her event icin PTB'yi dene — kilitli olanlari atla."""
+    global _ptb_cache, _ptb_locked
+    while True:
+        try:
+            now_ts = time.time()
+            for key, real in list(_market_cache.items()):
+                # Zaten kilitliyse atla
+                if _ptb_locked.get(key):
+                    continue
+
+                # Event baslamamissa atla
+                end_ts = real.get("end_ts", 0)
+                if end_ts <= now_ts:
+                    # Event bitmis — kilidi sifirla (yeni event icin)
+                    _ptb_locked.pop(key, None)
+                    _ptb_cache.pop(key, None)
+                    continue
+
+                sym = key.split("_")[0]
+                tf = key.split("_")[1] if "_" in key else "5M"
+                slug = real.get("slug", "")
+                if not slug:
+                    continue
+
+                ptb = None
+
+                # Yontem 1: Gamma API eventMetadata.priceToBeat
+                ptb = await _fetch_ptb_gamma(slug)
+
+                # Yontem 2: __NEXT_DATA__ scraping (fallback)
+                if not ptb:
+                    variant = PTB_VARIANT.get(tf, "fiveminute")
+                    ptb = await _fetch_ptb_next_data(slug, sym, variant)
+
+                if ptb and ptb > 0:
+                    _ptb_cache[key] = ptb
+                    _ptb_locked[key] = True
+                    addlog("success", f"PTB kilitlendi: {key} = ${ptb:,.2f}")
+
+                # Rate limit korumasi: her event arasi 0.5sn bekle
+                await asyncio.sleep(0.5)
+
+        except Exception as e:
+            logger.error(f"PTB dongusu hatasi: {e}")
+
+        # Her 10 saniyede tekrar kontrol (yeni eventler icin)
+        await asyncio.sleep(10)
+
+
 async def broadcast_rate_limit(retry_after: int = 60):
     """Notify all connected dashboard clients about a rate limit hit."""
     if not ws_clients:
@@ -853,12 +995,14 @@ async def lifespan(app):
     t3 = asyncio.create_task(gamma_scan_loop())
     t4 = asyncio.create_task(clob_ws_connect())
     t5 = asyncio.create_task(relayer_health_loop())
+    t6 = asyncio.create_task(_ptb_loop())
     yield
     t1.cancel()
     t2.cancel()
     t3.cancel()
     t4.cancel()
     t5.cancel()
+    t6.cancel()
 
 
 RELAYER_HEALTH_URL = "https://clob.polymarket.com"

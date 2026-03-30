@@ -1251,14 +1251,22 @@ html, body {
 
 /* ── Events list scroll container ── */
 .events-list {
-  flex: 1;
-  min-height: 0;  /* flex scroll icin kritik */
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 10px 14px 16px;
   display: flex;
   flex-direction: column;
   gap: 6px;
+  /* Scrollbar stili */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.15) transparent;
 }
+.events-list::-webkit-scrollbar { width: 6px; }
+.events-list::-webkit-scrollbar-track { background: transparent; }
+.events-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }
+.events-list::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.3); }
 
 /* ═══════════════════════════════════════════
    ACCORDION CARD  (.eac)
@@ -1270,6 +1278,8 @@ html, body {
   overflow: hidden;
   transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
   margin-bottom: 4px;
+  flex-shrink: 0 !important;
+  min-height: 54px !important;
 }
 .eac:hover { border-color: var(--border-hover); }
 .eac.expanded {
@@ -2374,6 +2384,8 @@ html, body {
 }
 .eac-price-up  { color: var(--accent-green); font-weight: 600; }
 .eac-price-dn  { color: var(--accent-red); font-weight: 600; }
+.eac-ptb-label { color: var(--text-muted); font-weight: 700; font-size: 9px; text-transform: uppercase; }
+.eac-ptb-val   { color: var(--accent-yellow); font-weight: 600; }
 .eac-price-sep { color: var(--border-primary); font-size: 8px; }
 
 /* Clickable title link */

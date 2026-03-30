@@ -654,7 +654,7 @@ function showGoBanner(sym) {
     document.querySelector('.main-content')?.prepend(banner);
   }
   const a = state.assets[sym];
-  banner.innerHTML = `<span class="go-banner-icon">🟢</span> <strong>${sym}</strong> — Tum kurallar saglandi! Giris icin hazir. <span class="go-banner-time">${new Date().toLocaleTimeString()}</span>`;
+  banner.innerHTML = `<span class="go-banner-icon">🟢</span> <strong>${sym}</strong> — Tüm kurallar sağlandı! Giriş için hazır. <span class="go-banner-time">${new Date().toLocaleTimeString()}</span>`;
   banner.style.display = 'flex';
   clearTimeout(banner._timer);
   banner._timer = setTimeout(() => { banner.style.display = 'none'; }, 8000);
@@ -783,12 +783,14 @@ function renderEventCard(key) {
             title="${pinned ? 'Takipten çıkar' : 'Takibe al'}">${pinned ? '📌' : '📍'}</button>
           ${liveBadge}
           ${hasPos ? '<span class="badge-pos">●</span>' : ''}
-          ${(allPass && state.botRunning && pinned) ? '<span class="badge-ready">GO</span>' : ''}
+          ${(allPass && state.botRunning && pinned) ? '<span class="badge-ready">AL</span>' : ''}
         </div>
         <div class="eac-price-row">
-          <span class="eac-price-up">UP ${(upAsk * 100).toFixed(1)}¢</span>
+          <span class="eac-ptb-label">PTB</span>
+          <span class="eac-ptb-val">${a.ptb ? '$' + Number(a.ptb).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}) : '—'}</span>
           <span class="eac-price-sep">│</span>
-          <span class="eac-price-dn">DN ${(downAsk * 100).toFixed(1)}¢</span>
+          <span class="eac-price-up">↑${(upAsk * 100).toFixed(1)}¢</span>
+          <span class="eac-price-dn">↓${(downAsk * 100).toFixed(1)}¢</span>
         </div>
       </div>
     </div>
