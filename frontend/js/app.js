@@ -796,10 +796,9 @@ function updateCardsInPlace(keys) {
     const cd  = a.countdown || 0;
 
     // Delta check — bu card için hiçbir şey değişmediyse DOM'a dokunma
-    // up_mid kullan (stabil REST poll değeri) — up_ask WS'den volatile gelebilir
     const _pv = _prevCardVals[key];
     const rulesStr = a.rules ? Object.values(a.rules).join('') : '';
-    const _cv = { p: a.price, cd, uA: mp.up_mid, dA: mp.down_mid, lp: a.live_price, r: rulesStr };
+    const _cv = { p: a.price, cd, uA: mp.up_ask, dA: mp.down_ask, lp: a.live_price, r: rulesStr };
     if (_pv && _pv.p === _cv.p && _pv.cd === _cv.cd &&
         _pv.uA === _cv.uA && _pv.dA === _cv.dA &&
         _pv.lp === _cv.lp && _pv.r === _cv.r) {
@@ -840,9 +839,9 @@ function updateCardsInPlace(keys) {
     const rules          = a.rules || {};
     const st             = getAssetStrategy(key);
     const spreadDisabled = (st.max_slippage_pct || 0.03) >= 0.5;
-    // up_mid kullan — WS up_ask volatile, up_mid REST poll'dan stabil
-    const upAsk          = (mp.up_mid  && mp.up_mid  > 0.01) ? mp.up_mid  : (mp.up_ask  || 0.5);
-    const downAsk        = (mp.down_mid && mp.down_mid > 0.01) ? mp.down_mid : (mp.down_ask || 0.5);
+    // up_ask kullan (WS = gerçek zamanlı, _applyToken zaten 0.03-0.97 filtreli)
+    const upAsk          = mp.up_ask  || 0.5;
+    const downAsk        = mp.down_ask || 0.5;
     const upPct          = (upAsk   * 100).toFixed(0);
     const dnPct          = (downAsk * 100).toFixed(0);
     const timeMin        = st.min_entry_seconds   || 10;
@@ -1011,9 +1010,9 @@ function renderEventCard(key) {
   const cd      = a.countdown || 0;
   const cdStr   = fmtCD(cd);
 
-  // up_mid kullan (stabil REST poll) — up_ask WS'den volatile gelebilir
-  const upAsk   = (mp.up_mid  && mp.up_mid  > 0.01) ? mp.up_mid  : (mp.up_ask  || 0.5);
-  const downAsk = (mp.down_mid && mp.down_mid > 0.01) ? mp.down_mid : (mp.down_ask || 0.5);
+  // up_ask kullan (WS = gerçek zamanlı, _applyToken zaten 0.03-0.97 filtreli)
+  const upAsk   = mp.up_ask  || 0.5;
+  const downAsk = mp.down_ask || 0.5;
   const upPct   = (upAsk  * 100).toFixed(0);
   const dnPct   = (downAsk * 100).toFixed(0);
 
@@ -1535,7 +1534,7 @@ function renderEventBody(sym) {
   const st = state.strategy;
   const refPrice = a.event?.open_reference || a.price;
   const priceDiff = a.price - refPrice;
-  const currentUpAsk = (mp.up_mid && mp.up_mid > 0.01) ? mp.up_mid : (mp.up_ask || 0.5);
+  const currentUpAsk = mp.up_ask || 0.5;
   const posCount = state.positions.length;
   const assetPosCount = state.positions.filter(p => p.asset === sym).length;
 
