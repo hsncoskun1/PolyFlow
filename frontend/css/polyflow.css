@@ -2244,6 +2244,8 @@ html, body {
   z-index: 200;
   backdrop-filter: blur(2px);
 }
+/* Modal açıkken ana içerik scroll'unu engelle */
+body.modal-open { overflow: hidden; }
 .page-modal {
   position: fixed;
   top: 0;

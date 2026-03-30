@@ -266,6 +266,7 @@ function connectWS() {
   ws.onclose = () => {
     state.connected = false;
     updateConnectionUI();
+    if (reconnectTimer) clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(connectWS, 2000);
   };
 
@@ -284,11 +285,11 @@ function handleStateUpdate(data) {
   if (data.mode)                       state.mode        = data.mode;
   if (data.balance      !== undefined) state.balance     = data.balance;
   if (data.session_pnl  !== undefined) state.sessionPnl  = data.session_pnl;
-  if (data.assets)                     state.assets      = data.assets;
-  if (data.pinned)                     state.pinned      = data.pinned;
-  if (data.selected_asset)             state.selectedAsset = data.selected_asset;
-  if (data.positions)                  state.positions   = data.positions;
-  if (data.trade_history)              state.tradeHistory = data.trade_history;
+  if (data.assets    && typeof data.assets    === 'object') state.assets      = data.assets;
+  if (Array.isArray(data.pinned))                          state.pinned      = data.pinned;
+  if (data.selected_asset)                                 state.selectedAsset = data.selected_asset;
+  if (Array.isArray(data.positions))                       state.positions   = data.positions;
+  if (Array.isArray(data.trade_history))                   state.tradeHistory = data.trade_history;
   if (data.connection_status)          state.connections = data.connection_status;
   if (data.strategy_status)            state.strategyStatus = data.strategy_status;
   if (data.ws_client_count !== undefined) state.wsClientCount = data.ws_client_count;
@@ -962,6 +963,12 @@ function openAssetSettings(key) {
   const a = state.assets[key];
   if (!a) return;
 
+  // Bot çalışıyorken ayar değiştirmeyi engelle (açık pozisyon riski)
+  if (state.botRunning) {
+    showToast('Bot çalışırken ayar değiştirilemez. Önce botu durdurun.', 'warn');
+    return;
+  }
+
   const saved = state.assetSettings[key] || null; // null = henüz ayar yok
   const tf   = a.timeframe || key.split('_').slice(1).join('_') || '5M';
   const tfLabel = {'5M':'5 Dakika','15M':'15 Dakika','1H':'1 Saat','4H':'4 Saat','1D':'1 Gün'}[tf] || tf;
@@ -1510,18 +1517,25 @@ function pushNotification(level, message) {
 // ═══════════════════════════════════════════
 // ACTIONS
 // ═══════════════════════════════════════════
+let _botToggling = false;
 async function toggleBot() {
-  if (state.botRunning) {
-    await fetch('/api/bot/stop', { method: 'POST' }).catch(() => {});
-    return;
-  }
+  if (_botToggling) return;
+  _botToggling = true;
   try {
-    const cfg = await fetch('/api/wallet').then(r => r.json());
-    if (!cfg.configured) { showBotBlockedModal(cfg); return; }
-  } catch(e) {
-    showToast('Cuzdan durumu kontrol edilemedi.', 'warn');
+    if (state.botRunning) {
+      await fetch('/api/bot/stop', { method: 'POST' }).catch(() => {});
+      return;
+    }
+    try {
+      const cfg = await fetch('/api/wallet').then(r => r.json());
+      if (!cfg.configured) { showBotBlockedModal(cfg); return; }
+    } catch(e) {
+      showToast('Cuzdan durumu kontrol edilemedi.', 'warn');
+    }
+    await fetch('/api/bot/start', { method: 'POST' }).catch(() => {});
+  } finally {
+    _botToggling = false;
   }
-  await fetch('/api/bot/start', { method: 'POST' }).catch(() => {});
 }
 
 function pauseBot() {
@@ -1625,12 +1639,17 @@ async function saveStrategy() {
     force_sell_enabled:  checkVal('cfg-force-sell'),
     stop_loss_enabled:   checkVal('cfg-stop-loss-enabled'),
   };
-  await fetch('/api/settings', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(s),
-  }).catch(() => {});
-  showToast('Strateji kaydedildi', 'success');
+  try {
+    const res = await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(s),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    showToast('Strateji kaydedildi', 'success');
+  } catch(e) {
+    showToast(`Kayıt başarısız: ${e.message}`, 'error');
+  }
 }
 
 async function saveTrade() {
@@ -1657,12 +1676,17 @@ async function saveTrade() {
     auto_claim:          autoClaim,
     one_trade_per_event: checkVal('cfg-one-per-event'),
   };
-  await fetch('/api/settings', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(s),
-  }).catch(() => {});
-  showToast('Trade ayarlari kaydedildi', 'success');
+  try {
+    const res = await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(s),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    showToast('Trade ayarlari kaydedildi', 'success');
+  } catch(e) {
+    showToast(`Kayıt başarısız: ${e.message}`, 'error');
+  }
 }
 
 async function saveSettings() {
@@ -1673,12 +1697,17 @@ async function saveSettings() {
     auto_start:            checkVal('cfg-auto-start'),
     notifications_enabled: checkVal('cfg-notifications'),
   };
-  await fetch('/api/settings', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(s),
-  }).catch(() => {});
-  showToast('Settings kaydedildi ✓', 'success');
+  try {
+    const res = await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(s),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    showToast('Settings kaydedildi ✓', 'success');
+  } catch(e) {
+    showToast(`Kayıt başarısız: ${e.message}`, 'error');
+  }
 }
 
 function saveWallet() {
@@ -1812,6 +1841,7 @@ function openPageModal(page) {
   // Show modal
   document.getElementById('page-modal-overlay').style.display = 'block';
   document.getElementById('page-modal').style.display = 'flex';
+  document.body.classList.add('modal-open');
 
   // Special: trigger page-specific updates
   if (page === 'positions') updatePositionsPage();
@@ -1877,6 +1907,7 @@ function openPageModal(page) {
 function closePageModal() {
   document.getElementById('page-modal-overlay').style.display = 'none';
   document.getElementById('page-modal').style.display = 'none';
+  document.body.classList.remove('modal-open');
   state.currentPage = 'watchlist';
   // Update sidebar: set watchlist active
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
@@ -1983,11 +2014,13 @@ function setText(id, val) {
 function numVal(id)   { return parseFloat(document.getElementById(id)?.value || '0'); }
 function checkVal(id) { return document.getElementById(id)?.checked || false; }
 function formatUSD(val) {
-  const n = Number(val) || 0;
+  let n = Number(val) || 0;
+  if (!isFinite(n)) n = 0;
   return n < 0 ? `-$${Math.abs(n).toFixed(2)}` : `$${n.toFixed(2)}`;
 }
 function formatAssetPrice(sym, price) {
-  const p = Number(price) || 0;
+  let p = Number(price) || 0;
+  if (!isFinite(p)) p = 0;
   if (p >= 1000) return `$${p.toLocaleString('en', {maximumFractionDigits:2})}`;
   if (p >= 1)    return `$${p.toFixed(3)}`;
   return `$${p.toFixed(5)}`;
@@ -2032,7 +2065,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }).catch(() => {});
 
   // Refresh strategy settings every 60 seconds
-  setInterval(() => {
+  const _settingsRefreshInterval = setInterval(() => {
     fetch('/api/settings').then(r => r.json()).then(s => {
       Object.assign(state.strategy, s);
     }).catch(() => {});
@@ -2045,11 +2078,21 @@ document.addEventListener('DOMContentLoaded', () => {
     .catch(() => {});
 
   // Polling when WS disconnected
-  setInterval(() => {
+  const _pollingInterval = setInterval(() => {
     if (!state.connected) {
       fetch('/api/status').then(r => r.json()).then(handleStateUpdate).catch(() => {});
     }
   }, 2000);
+
+  // Cleanup on unload — timer/interval sızıntısını önle
+  window.addEventListener('beforeunload', () => {
+    clearInterval(_settingsRefreshInterval);
+    clearInterval(_pollingInterval);
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    if (typeof _runtimeInterval !== 'undefined' && _runtimeInterval) clearInterval(_runtimeInterval);
+    if (typeof uptimeInterval !== 'undefined' && uptimeInterval) clearInterval(uptimeInterval);
+    if (ws) { try { ws.close(); } catch(_) {} }
+  });
 
   // Bildirimler gerçek bot eventlerinden gelecek
 
