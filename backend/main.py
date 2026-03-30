@@ -979,34 +979,75 @@ async def clob_ws_connect():
 
                 # Subscribe to market updates
                 sub_msg = json.dumps({
-                    "auth": {},
-                    "markets": [],
                     "assets_ids": [a["asset_id"] for a in subscribe_assets],
                     "type": "market",
+                    "custom_feature_enabled": True,
                 })
                 await ws.send(sub_msg)
 
                 async for raw_msg in ws:
                     try:
+                        if not raw_msg or raw_msg in ("PONG", "pong"):
+                            continue
                         data = json.loads(raw_msg)
                         msg_type = data.get("event_type", "")
-                        if msg_type in ("price_change", "book", "last_trade_price"):
-                            asset_id = data.get("asset_id", "")
-                            price = data.get("price") or data.get("last_trade_price")
-                            if asset_id and price:
-                                fp = float(price)
-                                _clob_prices[asset_id] = {"price": fp, "timestamp": time.time()}
-                                # CLOB fiyatini dogrudan _asset_market'a yaz
-                                mapping = token_to_key.get(asset_id)
-                                if mapping:
-                                    mkey, side = mapping
-                                    if mkey in _asset_market:
-                                        if side == "up":
-                                            _asset_market[mkey]["up_ask"] = fp
-                                            _asset_market[mkey]["up_bid"] = round(fp - 0.005, 3)
-                                        else:
-                                            _asset_market[mkey]["down_ask"] = fp
-                                            _asset_market[mkey]["down_bid"] = round(fp - 0.005, 3)
+
+                        def _update_token(tid: str, bid=None, ask=None, price=None):
+                            """Tek token icin fiyat guncelle."""
+                            if not tid:
+                                return
+                            if tid not in _clob_prices:
+                                _clob_prices[tid] = {}
+                            now = time.time()
+                            if bid is not None:
+                                _clob_prices[tid]["best_bid"] = float(bid)
+                            if ask is not None:
+                                _clob_prices[tid]["best_ask"] = float(ask)
+                            if price is not None:
+                                _clob_prices[tid]["price"] = float(price)
+                            elif bid is not None and ask is not None:
+                                _clob_prices[tid]["price"] = round((float(bid) + float(ask)) / 2.0, 4)
+                            _clob_prices[tid]["timestamp"] = now
+
+                            # _asset_market'a yaz
+                            mapping = token_to_key.get(tid)
+                            if mapping:
+                                mkey, side = mapping
+                                if mkey in _asset_market:
+                                    p = _clob_prices[tid].get("price", 0)
+                                    b = _clob_prices[tid].get("best_bid", p - 0.005)
+                                    a = _clob_prices[tid].get("best_ask", p + 0.005)
+                                    if side == "up":
+                                        _asset_market[mkey]["up_ask"] = round(a, 4)
+                                        _asset_market[mkey]["up_bid"] = round(b, 4)
+                                    else:
+                                        _asset_market[mkey]["down_ask"] = round(a, 4)
+                                        _asset_market[mkey]["down_bid"] = round(b, 4)
+
+                        if msg_type == "price_change":
+                            # price_changes array — eski bot formati
+                            for ch in (data.get("price_changes") or []):
+                                _update_token(
+                                    str(ch.get("asset_id", "")),
+                                    bid=ch.get("best_bid"),
+                                    ask=ch.get("best_ask"),
+                                    price=ch.get("price"),
+                                )
+                            # Tek asset_id formati (fallback)
+                            aid = data.get("asset_id", "")
+                            if aid:
+                                _update_token(aid, price=data.get("price") or data.get("last_trade_price"))
+
+                        elif msg_type in ("book", "last_trade_price"):
+                            aid = data.get("asset_id", "")
+                            _update_token(aid, price=data.get("price") or data.get("last_trade_price"))
+
+                        elif msg_type == "tick_size_change":
+                            # Tick size degisimi — ileride order execution icin
+                            pass
+
+                    except json.JSONDecodeError:
+                        continue
                     except Exception:
                         pass
 
