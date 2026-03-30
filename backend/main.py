@@ -272,7 +272,7 @@ async def broadcast_loop():
             await broadcast_state()
         except Exception as e:
             logger.error(f"broadcast_loop: {e}")
-        await asyncio.sleep(0.1)  # 100ms — hizli guncelleme
+        await asyncio.sleep(0.05)  # 50ms — en hizli guncelleme
 
 
 # ─── GAMMA MARKET SCAN ────────────────────────────────────────────────────────
@@ -1059,6 +1059,15 @@ def get_live_price(sym: str) -> float:
     """Belirli coin'in canli fiyatini don."""
     return _rtds_prices.get(sym, 0.0)
 
+async def _rtds_ping(ws):
+    """RTDS WebSocket keepalive."""
+    while True:
+        try:
+            await asyncio.sleep(10)
+            await ws.send("PING")
+        except Exception:
+            break
+
 async def _rtds_coin_loop(sym: str, rtds_symbol: str):
     """Tek bir coin icin RTDS WebSocket baglantisi. Her coin ayri baglanti."""
     global _rtds_prices
@@ -1079,36 +1088,43 @@ async def _rtds_coin_loop(sym: str, rtds_symbol: str):
                 await ws.send(sub_msg)
                 addlog("info", f"RTDS {sym} baglandi ({rtds_symbol})")
                 retry = 1
-                while _rtds_running:
-                    try:
-                        raw = await asyncio.wait_for(ws.recv(), timeout=15.0)
-                        if not raw or raw in ("PONG", "pong"):
+                ping_task = asyncio.create_task(_rtds_ping(ws))
+                try:
+                    while _rtds_running:
+                        try:
+                            raw = await asyncio.wait_for(ws.recv(), timeout=30.0)
+                            if not raw or raw in ("PONG", "pong"):
+                                continue
+                            if isinstance(raw, bytes):
+                                raw = raw.decode("utf-8", errors="ignore")
+                            if not raw.strip():
+                                continue
+                            try:
+                                data = json.loads(raw)
+                            except json.JSONDecodeError:
+                                continue
+                            payload = data.get("payload", {})
+                            if isinstance(payload, dict):
+                                val = payload.get("value", 0)
+                                if val and float(val) > 0:
+                                    _rtds_prices[sym] = round(float(val), 2)
+                                arr = payload.get("data", [])
+                                if arr and isinstance(arr, list):
+                                    last = arr[-1]
+                                    if isinstance(last, dict) and last.get("value"):
+                                        _rtds_prices[sym] = round(float(last["value"]), 2)
+                        except asyncio.TimeoutError:
                             continue
-                        if isinstance(raw, bytes):
-                            raw = raw.decode("utf-8", errors="ignore")
-                        if not raw.strip():
-                            continue
-                        data = json.loads(raw)
-                        payload = data.get("payload", {})
-                        if isinstance(payload, dict):
-                            # Format 1: payload.value (Chainlink)
-                            val = payload.get("value", 0)
-                            if val and float(val) > 0:
-                                _rtds_prices[sym] = round(float(val), 2)
-                            # Format 2: payload.data array (Binance)
-                            arr = payload.get("data", [])
-                            if arr and isinstance(arr, list):
-                                last = arr[-1]
-                                if isinstance(last, dict) and last.get("value"):
-                                    _rtds_prices[sym] = round(float(last["value"]), 2)
-                    except asyncio.TimeoutError:
-                        continue
-                    except websockets.ConnectionClosed:
-                        break
-                    except Exception:
-                        break
+                        except websockets.ConnectionClosed:
+                            addlog("warn", f"RTDS {sym} baglanti koptu")
+                            break
+                        except Exception:
+                            break
+                finally:
+                    ping_task.cancel()
         except Exception as e:
             if _rtds_running:
+                addlog("warn", f"RTDS {sym} hata: {type(e).__name__}: {e} — {retry}sn sonra yeniden")
                 await asyncio.sleep(retry)
                 retry = min(retry * 2, 30)
 
@@ -1118,7 +1134,8 @@ async def start_rtds():
     _rtds_running = True
     for sym, rtds_sym in RTDS_SYMBOLS.items():
         asyncio.create_task(_rtds_coin_loop(sym, rtds_sym))
-    addlog("info", f"RTDS basladi: {len(RTDS_SYMBOLS)} coin izleniyor")
+        await asyncio.sleep(0.5)  # baglantilari kademeli baslat
+    addlog("success", f"RTDS basladi: {len(RTDS_SYMBOLS)} coin izleniyor")
 
 
 async def relayer_health_loop():
