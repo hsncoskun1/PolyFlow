@@ -1434,6 +1434,8 @@ async def get_wallet():
         "passphrase": cfg["passphrase"],
         "funder": cfg["funder"],
         "sig_type": cfg["sig_type"],
+        "relayer_api_key": cfg.get("relayer_api_key", ""),
+        "relayer_address": cfg.get("relayer_address", ""),
     }
 
 
@@ -1453,6 +1455,8 @@ async def save_wallet(body: dict):
     secret = body.get("secret", "")
     passphrase = body.get("passphrase", "")
     sig_type = body.get("sig_type", "2")
+    relayer_api_key = body.get("relayer_api_key", "")
+    relayer_address = body.get("relayer_address", "")
 
     # Private key & funder always DISABLED by default (safety)
     if pk:
@@ -1470,6 +1474,14 @@ async def save_wallet(body: dict):
         lines.append(f"POLYMARKET_PASSPHRASE={passphrase}")
     lines.append(f"POLYMARKET_SIG_TYPE={sig_type}")
     lines.append("")
+
+    # Relayer (gasless claim/redeem)
+    if relayer_api_key:
+        lines.append(f"POLYMARKET_RELAYER_API_KEY={relayer_api_key}")
+    if relayer_address:
+        lines.append(f"POLYMARKET_RELAYER_ADDRESS={relayer_address}")
+    if relayer_api_key or relayer_address:
+        lines.append("")
 
     with open(env_path, "w") as f:
         f.write("\n".join(lines) + "\n")

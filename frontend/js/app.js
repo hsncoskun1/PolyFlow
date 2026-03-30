@@ -1539,10 +1539,11 @@ async function saveTrade() {
 
 async function saveSettings() {
   const s = {
-    mode:             document.getElementById('cfg-mode')?.value || 'PAPER',
-    btc_price_source: document.getElementById('cfg-btc-source')?.value || 'BINANCE',
-    port:             numVal('cfg-port'),
-    auto_start:       checkVal('cfg-auto-start'),
+    mode:                  document.getElementById('cfg-mode')?.value || 'PAPER',
+    btc_price_source:      document.getElementById('cfg-btc-source')?.value || 'BINANCE',
+    port:                  numVal('cfg-port'),
+    auto_start:            checkVal('cfg-auto-start'),
+    notifications_enabled: checkVal('cfg-notifications'),
   };
   await fetch('/api/settings', {
     method: 'POST',
@@ -1553,11 +1554,13 @@ async function saveSettings() {
 }
 
 function saveWallet() {
-  const pk         = document.getElementById('cfg-pk')?.value?.trim() || '';
-  const apiKey     = document.getElementById('cfg-apikey')?.value?.trim() || '';
-  const secret     = document.getElementById('cfg-secret')?.value?.trim() || '';
-  const passphrase = document.getElementById('cfg-passphrase')?.value?.trim() || '';
-  const funder     = document.getElementById('cfg-funder')?.value?.trim() || '';
+  const pk           = document.getElementById('cfg-pk')?.value?.trim() || '';
+  const apiKey       = document.getElementById('cfg-apikey')?.value?.trim() || '';
+  const secret       = document.getElementById('cfg-secret')?.value?.trim() || '';
+  const passphrase   = document.getElementById('cfg-passphrase')?.value?.trim() || '';
+  const funder       = document.getElementById('cfg-funder')?.value?.trim() || '';
+  const relayerKey   = document.getElementById('cfg-relayer-key')?.value?.trim() || '';
+  const relayerAddr  = document.getElementById('cfg-relayer-addr')?.value?.trim() || '';
 
   if (!pk || !apiKey || !secret || !passphrase) {
     showToast('Lütfen zorunlu tüm alanları doldurun (Private Key, API Key, Secret, Passphrase)', 'warn');
@@ -1567,7 +1570,15 @@ function saveWallet() {
   fetch('/api/wallet/save', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ private_key: pk, api_key: apiKey, api_secret: secret, api_passphrase: passphrase, funder }),
+    body: JSON.stringify({
+      private_key: pk,
+      api_key: apiKey,
+      secret: secret,
+      passphrase: passphrase,
+      funder: funder,
+      relayer_api_key: relayerKey,
+      relayer_address: relayerAddr,
+    }),
   }).then(r => r.json()).then(d => {
     const el = document.getElementById('wallet-status');
     const dot = document.getElementById('wallet-status-dot');
