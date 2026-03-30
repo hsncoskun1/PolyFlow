@@ -2831,7 +2831,7 @@ body.modal-open { overflow: hidden; }
 .eac-rb-sub  { font-size: 8px !important; white-space: nowrap !important; }
 
 /* Per-rule sabit genislik — kartlar arasi sutun hizalamasi */
-.eac-rb[data-rb="time"]        { min-width: 138px; width: 138px; }
+.eac-rb[data-rb="time"]        { min-width: 168px; width: 168px; }
 .eac-rb[data-rb="price"]       { min-width: 90px;  width: 90px;  }
 .eac-rb[data-rb="move"]        { min-width: 95px;  width: 95px;  }
 .eac-rb[data-rb="slip"]        { min-width: 72px;  width: 72px;  }

@@ -500,7 +500,7 @@ async def discover_slug_market(client: httpx.AsyncClient, slug: str) -> dict | N
         return {
             "conditionId": m.get("conditionId", ""),
             "question":    m.get("question", ""),
-            "slug":        slug,
+            "slug":        m.get("slug", "") or slug,
             "tokens":      raw_tokens,
             "up_price":    up_price,
             "down_price":  down_price,
@@ -1138,12 +1138,6 @@ async def clob_ws_connect():
                             a = _clob_prices[tid].get("best_ask", 0)
                             if not p:
                                 return
-                            # PRICE LOCK: Event son 20 saniyesinde WS guncelleme yapma
-                            ev_info = _market_cache.get(mkey)
-                            if ev_info:
-                                ev_remaining = ev_info.get("end_ts", 0) - time.time()
-                                if 0 < ev_remaining < 25:
-                                    return  # fiyati dondur — seesawing onle
                             # NOT: up_mid sadece REST midpoint poll tarafindan yazilir
                             # WS bid/ask event sonunda 0.01/0.99 spike yapabilir
                             if side == "up":
@@ -1211,15 +1205,6 @@ async def clob_midpoint_poll():
                 info = _market_cache.get(key)
                 if not info:
                     continue
-
-                # ── PRICE LOCK: Event son 25 saniyesinde fiyati dondur ──
-                # CLOB orderbook bu sure zarfinda cok ince, midpoint 0.01↔0.99 seesawing yapar
-                # Ayrica Polymarket yeni slug'i ~10sn onceden yayinliyor — 25sn yetisir
-                end_ts = info.get("end_ts", 0)
-                remaining = end_ts - time.time()
-                if 0 < remaining < 25:
-                    await asyncio.sleep(0.05)
-                    continue  # fiyati guncelleme — son deger kilitli
 
                 tokens = info.get("tokens", [])
                 if len(tokens) < 2:

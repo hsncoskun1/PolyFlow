@@ -75,6 +75,12 @@ let _symToKeys    = {};    // 'BTC' → ['BTC_5M','BTC_15M',...]
 let _directReady  = false; // asset state yüklendi mi?
 const RTDS_SYM_MAP = { btcusdt:'BTC', ethusdt:'ETH', solusdt:'SOL', xrpusdt:'XRP', dogeusdt:'DOGE', bnbusdt:'BNB', hypeusdt:'HYPE' };
 
+// ─── WS Market Price Cache ────────────────────────────────────────────────────
+// Frontend CLOB WS'den gelen fiyatlar burada saklanır.
+// Backend state_update her 500ms'de state.assets'i eziyor → WS değerleri kaybolur.
+// Çözüm: backend overwrite'tan sonra bu cache'den tekrar uygula → seesawing önle.
+const _wsMarketPrices = {}; // key → {up_ask, up_bid, down_ask, down_bid, ts}
+
 // rAF + throttle batching — CLOB 1000+ msg/sn push eder.
 // Her kart için min 150ms görüntüleme süresi (göz okuyabilsin).
 // Aynı frame'deki tüm değişiklikler toplu tek DOM update'e indirgenir.
@@ -323,11 +329,6 @@ function _startDirectClob() {
         const a = state.assets[m.key];
         if (!a) return;
 
-        // ── PRICE LOCK: Event son 25sn'de frontend direkt WS güncelleme yapmasın ──
-        // Backend'deki lock ile aynı mantık — orderbook boşalınca 0.01↔0.99 seesawing olur
-        const cd = a.countdown || 0;
-        if (cd > 0 && cd < 25) return;
-
         const p = parseFloat(price) || (bid && ask ? (parseFloat(bid) + parseFloat(ask)) / 2 : 0);
         if (!p) return;
 
@@ -335,13 +336,26 @@ function _startDirectClob() {
         if (p < 0.03 || p > 0.97) return;
 
         if (!a.market) a.market = {};
+        if (!_wsMarketPrices[m.key]) _wsMarketPrices[m.key] = {};
+        const wsc = _wsMarketPrices[m.key];
+
         if (m.side === 'up') {
-          a.price = p;
-          a.market.up_ask  = parseFloat(ask || p);
-          a.market.up_bid  = parseFloat(bid || p - 0.005);
+          const uA = parseFloat(ask) > 0 ? parseFloat(ask) : p;
+          const uB = parseFloat(bid) > 0 ? parseFloat(bid) : (p - 0.005);
+          a.price         = p;
+          a.market.up_ask = uA;
+          a.market.up_bid = uB;
+          wsc.up_ask = uA;
+          wsc.up_bid = uB;
+          wsc.ts = Date.now();
         } else {
-          a.market.down_ask = parseFloat(ask || p);
-          a.market.down_bid = parseFloat(bid || p - 0.005);
+          const dA = parseFloat(ask) > 0 ? parseFloat(ask) : p;
+          const dB = parseFloat(bid) > 0 ? parseFloat(bid) : (p - 0.005);
+          a.market.down_ask = dA;
+          a.market.down_bid = dB;
+          wsc.down_ask = dA;
+          wsc.down_bid = dB;
+          wsc.ts = Date.now();
         }
         // Gerçek spread
         const upAsk  = a.market.up_ask  || 0.5;
@@ -502,7 +516,21 @@ function _mergeState(data) {
   if (data.mode)                       state.mode         = data.mode;
   if (data.balance      !== undefined) state.balance      = data.balance;
   if (data.session_pnl  !== undefined) state.sessionPnl   = data.session_pnl;
-  if (data.assets    && typeof data.assets === 'object')   state.assets      = data.assets;
+  if (data.assets    && typeof data.assets === 'object') {
+    state.assets = data.assets;
+    // Backend state_update her 500ms'de market fiyatlarını eziyor → seesawing
+    // Çözüm: WS'den gelen değerleri backend overwrite'ının üzerine geri uygula
+    // (WS = gerçek zamanlı, REST = 3sn gecikmeli → WS her zaman öncelikli)
+    Object.entries(_wsMarketPrices).forEach(([k, wsc]) => {
+      if (!state.assets[k]) return;
+      if (!wsc.ts || Date.now() - wsc.ts > 10000) return; // 10sn geçmişse stale, kullanma
+      if (!state.assets[k].market) state.assets[k].market = {};
+      if (wsc.up_ask   !== undefined) state.assets[k].market.up_ask   = wsc.up_ask;
+      if (wsc.up_bid   !== undefined) state.assets[k].market.up_bid   = wsc.up_bid;
+      if (wsc.down_ask !== undefined) state.assets[k].market.down_ask = wsc.down_ask;
+      if (wsc.down_bid !== undefined) state.assets[k].market.down_bid = wsc.down_bid;
+    });
+  }
   if (Array.isArray(data.pinned))                          state.pinned      = data.pinned;
   if (data.selected_asset)                                 state.selectedAsset = data.selected_asset;
   if (Array.isArray(data.positions))                       state.positions   = data.positions;
@@ -846,8 +874,14 @@ function updateCardsInPlace(keys) {
     const dnPct          = (downAsk * 100).toFixed(0);
     const timeMin        = st.min_entry_seconds   || 10;
     const timeMax        = st.time_rule_threshold || 90;
-    const timeMinStr     = timeMin < 60 ? `${timeMin}sn` : `${Math.floor(timeMin/60)}:${String(timeMin%60).padStart(2,'0')}dk`;
-    const timeMaxStr     = timeMax < 60 ? `${timeMax}sn` : `${Math.floor(timeMax/60)}:${String(timeMax%60).padStart(2,'0')}dk`;
+    const _fmtSec = (s) => {
+      if (s < 60) return `${s}sn`;
+      if (s < 3600) return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}dk`;
+      const hh = Math.floor(s/3600), mm = Math.floor((s%3600)/60);
+      return `${hh}h${String(mm).padStart(2,'0')}dk`;
+    };
+    const timeMinStr     = _fmtSec(timeMin);
+    const timeMaxStr     = _fmtSec(timeMax);
     const btcDelta       = (a.live_price && a.ptb) ? (a.live_price - a.ptb) : null;
     const moveStr        = btcDelta != null
       ? (btcDelta >= 0 ? '+' : '') + '$' + Math.abs(btcDelta).toFixed(2)
