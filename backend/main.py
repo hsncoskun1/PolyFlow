@@ -675,44 +675,54 @@ def get_ptb(key: str) -> float:
     return _ptb_cache.get(key, 0.0)
 
 
+_ptb_slug_map: dict[str, str] = {}   # key → son kilitli slug (slug degisince sifirla)
+
 async def _ptb_loop():
-    """Her event icin PTB'yi dene — kilitli olanlari atla."""
-    global _ptb_cache, _ptb_locked
+    """Her event icin PTB'yi dene — slug degisince sifirla, __NEXT_DATA__ birincil."""
+    global _ptb_cache, _ptb_locked, _ptb_slug_map
     while True:
         try:
             now_ts = time.time()
             for key, real in list(_market_cache.items()):
-                # Zaten kilitliyse atla
+                slug = real.get("slug", "")
+                if not slug:
+                    continue
+
+                # Slug degistiyse (yeni event) → eski PTB'yi sifirla
+                old_slug = _ptb_slug_map.get(key, "")
+                if old_slug and old_slug != slug:
+                    _ptb_locked.pop(key, None)
+                    _ptb_cache.pop(key, None)
+                    _ptb_slug_map[key] = slug
+
+                # Zaten bu slug icin kilitliyse atla
                 if _ptb_locked.get(key):
                     continue
 
-                # Event baslamamissa atla
+                # Event bitmisse atla
                 end_ts = real.get("end_ts", 0)
                 if end_ts <= now_ts:
-                    # Event bitmis — kilidi sifirla (yeni event icin)
                     _ptb_locked.pop(key, None)
                     _ptb_cache.pop(key, None)
                     continue
 
                 sym = key.split("_")[0]
                 tf = key.split("_")[1] if "_" in key else "5M"
-                slug = real.get("slug", "")
-                if not slug:
-                    continue
 
                 ptb = None
 
-                # Yontem 1: Gamma API eventMetadata.priceToBeat
-                ptb = await _fetch_ptb_gamma(slug)
+                # Yontem 1 (birincil): __NEXT_DATA__ scraping — birebir dogru
+                variant = PTB_VARIANT.get(tf, "fiveminute")
+                ptb = await _fetch_ptb_next_data(slug, sym, variant)
 
-                # Yontem 2: __NEXT_DATA__ scraping (fallback)
+                # Yontem 2 (fallback): Gamma API eventMetadata.priceToBeat
                 if not ptb:
-                    variant = PTB_VARIANT.get(tf, "fiveminute")
-                    ptb = await _fetch_ptb_next_data(slug, sym, variant)
+                    ptb = await _fetch_ptb_gamma(slug)
 
                 if ptb and ptb > 0:
                     _ptb_cache[key] = ptb
                     _ptb_locked[key] = True
+                    _ptb_slug_map[key] = slug
                     addlog("success", f"PTB kilitlendi: {key} = ${ptb:,.2f}")
 
                 # Rate limit korumasi: her event arasi 0.5sn bekle

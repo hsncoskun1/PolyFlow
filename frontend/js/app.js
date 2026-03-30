@@ -787,10 +787,7 @@ function renderEventCard(key) {
         </div>
         <div class="eac-price-row">
           <span class="eac-ptb-label">PTB</span>
-          <span class="eac-ptb-val">${a.ptb ? '$' + Number(a.ptb).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}) : '—'}</span>
-          <span class="eac-price-sep">│</span>
-          <span class="eac-price-up">↑${(upAsk * 100).toFixed(1)}¢</span>
-          <span class="eac-price-dn">↓${(downAsk * 100).toFixed(1)}¢</span>
+          <span class="eac-ptb-val">${a.ptb ? '$' + Number(a.ptb).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}) : '...'}</span>
         </div>
       </div>
     </div>
@@ -1426,23 +1423,57 @@ function placeOrder(sym, side) {
 async function saveStrategy() {
   const s = {
     time_rule_threshold: numVal('cfg-time-threshold'),
+    min_entry_seconds:   numVal('cfg-min-entry-sec'),
     min_entry_price:     numVal('cfg-min-entry'),
     max_entry_price:     numVal('cfg-max-entry'),
+    min_btc_move_up:     numVal('cfg-btc-move'),
+    min_btc_move_down:   numVal('cfg-btc-move'),
     max_slippage_pct:    numVal('cfg-slippage') / 100,
     target_exit_price:   numVal('cfg-target'),
     stop_loss_price:     numVal('cfg-stoploss'),
-    order_amount:        numVal('cfg-amount'),
-    event_trade_limit:   numVal('cfg-event-limit'),
-    max_open_positions:  numVal('cfg-max-pos'),
+    force_sell_before_resolution_seconds: numVal('cfg-force-sell-sec'),
+    sell_retry_count:    numVal('cfg-sell-retry'),
     force_sell_enabled:  checkVal('cfg-force-sell'),
-    auto_claim:          checkVal('cfg-auto-claim'),
+    stop_loss_enabled:   checkVal('cfg-stop-loss-enabled'),
   };
   await fetch('/api/settings', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(s),
   }).catch(() => {});
-  showToast('Strategy kaydedildi ✓', 'success');
+  showToast('Strateji kaydedildi', 'success');
+}
+
+async function saveTrade() {
+  // Oto claim kontrolu: relayer ayari yoksa aktif edilemez
+  const autoClaim = checkVal('cfg-auto-claim');
+  if (autoClaim) {
+    try {
+      const w = await fetch('/api/wallet').then(r => r.json());
+      if (!w.relayer_api_key || !w.relayer_address) {
+        showToast('Otomatik Tahsilat icin once Cuzdan > Relayer ayarlarini doldurun', 'error');
+        const el = document.getElementById('cfg-auto-claim');
+        if (el) el.checked = false;
+        return;
+      }
+    } catch(e) {}
+  }
+  const s = {
+    order_amount:        numVal('cfg-amount'),
+    buy_order_type:      document.getElementById('cfg-buy-type')?.value || 'MARKET',
+    sell_order_type:     document.getElementById('cfg-sell-type')?.value || 'MARKET',
+    event_trade_limit:   numVal('cfg-event-limit'),
+    max_open_positions:  numVal('cfg-max-pos'),
+    max_total_trades:    numVal('cfg-max-daily'),
+    auto_claim:          autoClaim,
+    one_trade_per_event: checkVal('cfg-one-per-event'),
+  };
+  await fetch('/api/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(s),
+  }).catch(() => {});
+  showToast('Trade ayarlari kaydedildi', 'success');
 }
 
 async function saveSettings() {
@@ -1512,6 +1543,7 @@ const PAGE_TITLES = {
   positions: 'Pozisyonlar',
   history:   'İşlem Geçmişi',
   strategy:  'Strateji Kuralları',
+  trade:     'Trade Motoru',
   settings:  'Genel Ayarlar',
   wallet:    'Cüzdan',
   logs:      'Kayıtlar',
@@ -1547,7 +1579,7 @@ function openPageModal(page) {
     .forEach(n => n.classList.add('active'));
 
   // Auto-open parent submenu for settings pages, close for others
-  const subPageParents = { settings:'settings', strategy:'settings', wallet:'settings' };
+  const subPageParents = { settings:'settings', strategy:'settings', trade:'settings', wallet:'settings' };
   const isSettingsPage = !!subPageParents[page];
   // Close all submenus first
   document.querySelectorAll('.nav-submenu, .nav-sub-submenu').forEach(s => {
@@ -1587,27 +1619,37 @@ function openPageModal(page) {
   if (page === 'logs')      renderLogPage();
 
   // Settings: reload form values
-  if (page === 'settings' || page === 'strategy' || page === 'wallet') {
+  if (page === 'settings' || page === 'strategy' || page === 'trade' || page === 'wallet') {
     fetch('/api/settings').then(r => r.json()).then(s => {
       const set = (id, v) => { const el = document.getElementById(id); if (el && v !== undefined) el.value = v; };
+      const chk = (id, v) => { const el = document.getElementById(id); if (el && v !== undefined) el.checked = v; };
+      // Strateji
       set('cfg-time-threshold', s.time_rule_threshold);
+      set('cfg-min-entry-sec',  s.min_entry_seconds);
       set('cfg-min-entry',      s.min_entry_price);
       set('cfg-max-entry',      s.max_entry_price);
+      set('cfg-btc-move',       s.min_btc_move_up);
       set('cfg-slippage',       s.max_slippage_pct !== undefined ? (s.max_slippage_pct*100).toFixed(1) : 3);
       set('cfg-target',         s.target_exit_price);
       set('cfg-stoploss',       s.stop_loss_price);
+      set('cfg-force-sell-sec', s.force_sell_before_resolution_seconds);
+      set('cfg-sell-retry',     s.sell_retry_count);
+      chk('cfg-force-sell',     s.force_sell_enabled);
+      chk('cfg-stop-loss-enabled', s.stop_loss_enabled !== undefined ? s.stop_loss_enabled : true);
+      // Trade motoru
       set('cfg-amount',         s.order_amount);
+      set('cfg-buy-type',       s.buy_order_type);
+      set('cfg-sell-type',      s.sell_order_type);
       set('cfg-event-limit',    s.event_trade_limit);
       set('cfg-max-pos',        s.max_open_positions);
+      set('cfg-max-daily',      s.max_total_trades);
+      chk('cfg-auto-claim',     s.auto_claim);
+      chk('cfg-one-per-event',  s.one_trade_per_event !== undefined ? s.one_trade_per_event : true);
+      // Genel
       set('cfg-mode',           s.mode);
-      set('cfg-btc-source',     s.btc_price_source);
       set('cfg-port',           s.port);
-      const fs = document.getElementById('cfg-force-sell');
-      const ac = document.getElementById('cfg-auto-claim');
-      const as = document.getElementById('cfg-auto-start');
-      if (fs && s.force_sell_enabled !== undefined) fs.checked = s.force_sell_enabled;
-      if (ac && s.auto_claim         !== undefined) ac.checked = s.auto_claim;
-      if (as && s.auto_start         !== undefined) as.checked = s.auto_start;
+      chk('cfg-auto-start',    s.auto_start);
+      chk('cfg-notifications', s.notifications_enabled !== undefined ? s.notifications_enabled : true);
     }).catch(() => {});
   }
 
@@ -1615,11 +1657,13 @@ function openPageModal(page) {
   if (page === 'wallet') {
     fetch('/api/wallet').then(r => r.json()).then(cfg => {
       const set = (id, v) => { const el = document.getElementById(id); if (el && v) el.value = v; };
-      set('cfg-pk',         cfg.private_key);
-      set('cfg-apikey',     cfg.api_key);
-      set('cfg-secret',     cfg.secret);
-      set('cfg-passphrase', cfg.passphrase);
-      set('cfg-funder',     cfg.funder);
+      set('cfg-pk',           cfg.private_key);
+      set('cfg-apikey',       cfg.api_key);
+      set('cfg-secret',       cfg.secret);
+      set('cfg-passphrase',   cfg.passphrase);
+      set('cfg-funder',       cfg.funder);
+      set('cfg-relayer-key',  cfg.relayer_api_key);
+      set('cfg-relayer-addr', cfg.relayer_address);
       const dot = document.getElementById('wallet-status-dot');
       const lbl = document.getElementById('wallet-status');
       if (cfg.configured) {

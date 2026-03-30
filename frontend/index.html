@@ -57,21 +57,14 @@
         <div class="nav-subitem" data-page="settings" onclick="switchPage('settings')">
           <span class="nav-subitem-icon">🔧</span><span>Genel</span>
         </div>
-        <!-- Strategy sub-item (also collapsible) -->
-        <div class="nav-subitem has-submenu" id="nav-strategy-parent" onclick="toggleNavSubmenu('strategy')">
+        <div class="nav-subitem" data-page="strategy" onclick="switchPage('strategy')">
           <span class="nav-subitem-icon">🎯</span><span>Strateji</span>
         </div>
-        <div class="nav-sub-submenu" id="submenu-strategy">
-          <div class="nav-subsubitem" data-page="strategy" onclick="switchPage('strategy')">
-            <span>📥 Giriş Kuralları</span>
-          </div>
-          <div class="nav-subsubitem" data-page="strategy" onclick="switchPage('strategy')">
-            <span>📤 Çıkış Kuralları</span>
-          </div>
+        <div class="nav-subitem" data-page="trade" onclick="switchPage('trade')">
+          <span class="nav-subitem-icon">💹</span><span>Trade Motoru</span>
         </div>
-        <!-- Wallet sub-item -->
         <div class="nav-subitem" data-page="wallet" onclick="switchPage('wallet')">
-          <span class="nav-subitem-icon">👛</span><span>Wallet</span>
+          <span class="nav-subitem-icon">👛</span><span>Cüzdan</span>
         </div>
       </div>
 
@@ -241,84 +234,166 @@
     </table>
   </div>
 
-  <!-- STRATEGY -->
+  <!-- STRATEJI -->
   <div id="tpl-strategy">
+    <p style="font-size:11px;color:var(--text-muted);margin-bottom:14px;">Giriş ve çıkış kurallarını ayarlayın. Her event için ayrı ayar yapmak isterseniz event kartındaki "Ayarlar" butonunu kullanın.</p>
     <div class="grid-2">
       <div class="card">
-        <div class="card-title mb-3">Entry Rules</div>
-        <div class="form-group"><label class="form-label">Time Threshold (sn)</label>
-          <input type="number" class="form-input" id="cfg-time-threshold" value="90"></div>
-        <div class="form-group"><label class="form-label">Min Entry Price</label>
-          <input type="number" class="form-input" id="cfg-min-entry" value="0.75" step="0.01"></div>
-        <div class="form-group"><label class="form-label">Max Entry Price</label>
-          <input type="number" class="form-input" id="cfg-max-entry" value="0.98" step="0.01"></div>
-        <div class="form-group"><label class="form-label">Min Fiyat Hareketi (%)</label>
-          <input type="number" class="form-input" id="cfg-btc-move" value="0.1" step="0.01"></div>
-        <div class="form-group"><label class="form-label">Max Slippage %</label>
-          <input type="number" class="form-input" id="cfg-slippage" value="3" step="0.5"></div>
+        <div class="card-title mb-3">📥 Giriş Kuralları</div>
+        <div class="form-group">
+          <label class="form-label">Zaman Eşiği (sn) <span class="info-btn" title="Event bitimine kaç saniye kala işlem aranmaya başlar. Örn: 90 = son 90 saniyede giriş aranır.">i</span></label>
+          <input type="number" class="form-input" id="cfg-time-threshold" value="90">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Min Giriş Süresi (sn) <span class="info-btn" title="Event bitimine bu kadar saniye kala artık işleme girilmez. Güvenlik tamponu.">i</span></label>
+          <input type="number" class="form-input" id="cfg-min-entry-sec" value="10">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Min Giriş Fiyatı <span class="info-btn" title="UP token minimum fiyatı. 0.75 = en az %75 olasılıkla UP beklenmeli.">i</span></label>
+          <input type="number" class="form-input" id="cfg-min-entry" value="0.75" step="0.01">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Max Giriş Fiyatı <span class="info-btn" title="UP token maksimum fiyatı. 0.98 = %98 üzeri çok pahalı, girmeye değmez.">i</span></label>
+          <input type="number" class="form-input" id="cfg-max-entry" value="0.98" step="0.01">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Min Fiyat Hareketi ($) <span class="info-btn" title="Coin fiyatında minimum değişim. Yeterli hareket olmadan pozisyon açılmaz.">i</span></label>
+          <input type="number" class="form-input" id="cfg-btc-move" value="70" step="1">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Max Slippage % <span class="info-btn" title="Alış-satış farkı (spread) bu oranı geçerse işlem açılmaz. 3 = %3 max spread.">i</span></label>
+          <input type="number" class="form-input" id="cfg-slippage" value="3" step="0.5">
+        </div>
       </div>
       <div class="card">
-        <div class="card-title mb-3">Exit Rules</div>
-        <div class="form-group"><label class="form-label">Target Exit Price</label>
-          <input type="number" class="form-input" id="cfg-target" value="0.90" step="0.01"></div>
-        <div class="form-group"><label class="form-label">Stop Loss Price</label>
-          <input type="number" class="form-input" id="cfg-stoploss" value="0.80" step="0.01"></div>
-        <div class="form-group"><label class="form-label">Order Amount ($)</label>
-          <input type="number" class="form-input" id="cfg-amount" value="2" step="0.5"></div>
-        <div class="form-group"><label class="form-label">Event Trade Limit</label>
-          <input type="number" class="form-input" id="cfg-event-limit" value="1"></div>
-        <div class="form-group"><label class="form-label">Max Open Positions</label>
-          <input type="number" class="form-input" id="cfg-max-pos" value="1"></div>
-        <div class="flex gap-4 mt-3">
+        <div class="card-title mb-3">📤 Çıkış Kuralları</div>
+        <div class="form-group">
+          <label class="form-label">Hedef Çıkış Fiyatı <span class="info-btn" title="Bu fiyata ulaşınca pozisyon kar ile kapatılır (Take Profit). 0.90 = %90.">i</span></label>
+          <input type="number" class="form-input" id="cfg-target" value="0.90" step="0.01">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Zarar Durdur Fiyatı <span class="info-btn" title="Bu fiyatın altına düşerse pozisyon zararla kapatılır (Stop Loss). 0.50 = %50.">i</span></label>
+          <input type="number" class="form-input" id="cfg-stoploss" value="0.50" step="0.01">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Zorunlu Satış Süresi (sn) <span class="info-btn" title="Event bitmeden bu kadar saniye önce pozisyon zorla kapatılır. 15 = son 15 saniyede sat.">i</span></label>
+          <input type="number" class="form-input" id="cfg-force-sell-sec" value="15">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Satış Deneme Sayısı <span class="info-btn" title="Satış başarısız olursa kaç kez yeniden denenecek.">i</span></label>
+          <input type="number" class="form-input" id="cfg-sell-retry" value="200">
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px;">
           <label class="flex items-center gap-2">
             <label class="toggle"><input type="checkbox" id="cfg-force-sell" checked><span class="toggle-slider"></span></label>
-            <span class="text-sm">Force Sell</span>
+            <span class="text-sm">Zorunlu Satış Aktif <span class="info-btn" title="Event bitmeden önce pozisyonu otomatik kapat.">i</span></span>
           </label>
           <label class="flex items-center gap-2">
-            <label class="toggle"><input type="checkbox" id="cfg-auto-claim" checked><span class="toggle-slider"></span></label>
-            <span class="text-sm">Auto Claim</span>
+            <label class="toggle"><input type="checkbox" id="cfg-stop-loss-enabled" checked><span class="toggle-slider"></span></label>
+            <span class="text-sm">Zarar Durdur Aktif <span class="info-btn" title="Stop loss fiyatına düşünce otomatik sat.">i</span></span>
           </label>
         </div>
-        <button class="btn btn-primary w-full mt-4" onclick="saveStrategy()">Save Strategy</button>
+        <button class="btn btn-primary w-full mt-4" onclick="saveStrategy()">Stratejiyi Kaydet</button>
       </div>
     </div>
   </div>
 
-  <!-- SETTINGS -->
-  <div id="tpl-settings">
+  <!-- TRADE MOTORU (YENİ) -->
+  <div id="tpl-trade">
+    <p style="font-size:11px;color:var(--text-muted);margin-bottom:14px;">İşlem miktarı, emir tipi ve limitleri ayarlayın. Bu ayarlar tüm eventler için geçerlidir.</p>
     <div class="grid-2">
       <div class="card">
-        <div class="card-title mb-3">General Settings</div>
-        <div class="form-group"><label class="form-label">Trading Mode</label>
-          <select class="form-input" id="cfg-mode">
-            <option value="PAPER">PAPER (Simulated)</option>
-            <option value="LIVE">LIVE (Real Money)</option>
-          </select></div>
-        <div class="form-group"><label class="form-label">Fiyat Kaynağı</label>
-          <select class="form-input" id="cfg-btc-source">
-            <option value="POLYMARKET" selected>Polymarket WebSocket</option>
-          </select></div>
-        <div class="form-group"><label class="form-label">Server Port</label>
-          <input type="number" class="form-input" id="cfg-port" value="8002"></div>
-        <label class="flex items-center gap-2 mt-2">
-          <label class="toggle"><input type="checkbox" id="cfg-auto-start"><span class="toggle-slider"></span></label>
-          <span class="text-sm">Auto-start bot on launch</span>
-        </label>
-        <button class="btn btn-primary w-full mt-4" onclick="saveSettings()">Save Settings</button>
+        <div class="card-title mb-3">💰 İşlem Miktarı</div>
+        <div class="form-group">
+          <label class="form-label">İşlem Miktarı ($) <span class="info-btn" title="Her trade'de kullanılacak USDC miktarı.">i</span></label>
+          <input type="number" class="form-input" id="cfg-amount" value="2" step="0.5">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Alış Emir Tipi <span class="info-btn" title="MARKET: anlık fiyattan al. LIMIT: belirlediğin fiyattan al (daha ucuz ama dolmayabilir).">i</span></label>
+          <select class="form-input" id="cfg-buy-type">
+            <option value="MARKET">MARKET (Anlık)</option>
+            <option value="LIMIT">LIMIT (Fiyat Belirle)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Satış Emir Tipi <span class="info-btn" title="MARKET: anlık fiyattan sat. LIMIT: belirlediğin fiyattan sat.">i</span></label>
+          <select class="form-input" id="cfg-sell-type">
+            <option value="MARKET">MARKET (Anlık)</option>
+            <option value="LIMIT">LIMIT (Fiyat Belirle)</option>
+          </select>
+        </div>
       </div>
       <div class="card">
-        <div class="card-title mb-3">Bağlantı Durumu</div>
+        <div class="card-title mb-3">🔒 Limitler</div>
+        <div class="form-group">
+          <label class="form-label">Event Başına Limit <span class="info-btn" title="Aynı event'te (örn. BTC 5DK 13:00) en fazla kaç trade açılabilir.">i</span></label>
+          <input type="number" class="form-input" id="cfg-event-limit" value="1">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Max Açık Pozisyon <span class="info-btn" title="Aynı anda en fazla kaç pozisyon açık olabilir. Tüm eventler dahil.">i</span></label>
+          <input type="number" class="form-input" id="cfg-max-pos" value="1">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Günlük Max Trade <span class="info-btn" title="Bir günde en fazla kaç trade açılabilir. 0 = sınırsız.">i</span></label>
+          <input type="number" class="form-input" id="cfg-max-daily" value="0">
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px;">
+          <label class="flex items-center gap-2">
+            <label class="toggle"><input type="checkbox" id="cfg-auto-claim" checked><span class="toggle-slider"></span></label>
+            <span class="text-sm">Otomatik Tahsilat <span class="info-btn" title="Kazanan pozisyonları otomatik olarak tahsil et (claim).">i</span></span>
+          </label>
+          <label class="flex items-center gap-2">
+            <label class="toggle"><input type="checkbox" id="cfg-one-per-event" checked><span class="toggle-slider"></span></label>
+            <span class="text-sm">Event Başına Tek İşlem <span class="info-btn" title="Her event'te yalnızca bir kez işlem aç. Kapatıldıktan sonra tekrar açılmaz.">i</span></span>
+          </label>
+        </div>
+        <button class="btn btn-primary w-full mt-4" onclick="saveTrade()">Trade Ayarlarını Kaydet</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- GENEL AYARLAR -->
+  <div id="tpl-settings">
+    <p style="font-size:11px;color:var(--text-muted);margin-bottom:14px;">Bot modu, otomasyon ve sistem bilgilerini görüntüleyin.</p>
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title mb-3">🔧 Genel</div>
+        <div class="form-group">
+          <label class="form-label">Trade Modu <span class="info-btn" title="PAPER: simülasyon (gerçek para harcanmaz). LIVE: gerçek para ile trade.">i</span></label>
+          <select class="form-input" id="cfg-mode">
+            <option value="PAPER">PAPER (Simülasyon)</option>
+            <option value="LIVE">LIVE (Gerçek Para)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Sunucu Portu <span class="info-btn" title="Dashboard'un çalıştığı port numarası.">i</span></label>
+          <input type="number" class="form-input" id="cfg-port" value="8002">
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px;">
+          <label class="flex items-center gap-2">
+            <label class="toggle"><input type="checkbox" id="cfg-auto-start"><span class="toggle-slider"></span></label>
+            <span class="text-sm">Başlangıçta Botu Otomatik Başlat</span>
+          </label>
+          <label class="flex items-center gap-2">
+            <label class="toggle"><input type="checkbox" id="cfg-notifications" checked><span class="toggle-slider"></span></label>
+            <span class="text-sm">Bildirimler Aktif</span>
+          </label>
+        </div>
+        <button class="btn btn-primary w-full mt-4" onclick="saveSettings()">Genel Ayarları Kaydet</button>
+      </div>
+      <div class="card">
+        <div class="card-title mb-3">📡 Bağlantı Durumu</div>
         <div class="connection-grid">
           <div class="connection-item"><span class="status-dot offline" id="set-conn-clob"></span><span>CLOB WS API</span></div>
-          <div class="connection-item"><span class="status-dot offline" id="set-conn-btc"></span><span>Price Feed</span></div>
+          <div class="connection-item"><span class="status-dot offline" id="set-conn-btc"></span><span>Fiyat Akışı</span></div>
           <div class="connection-item"><span class="status-dot offline" id="set-conn-user"></span><span>Relayer API</span></div>
           <div class="connection-item"><span class="status-dot offline" id="set-conn-gamma"></span><span>Gamma API</span></div>
         </div>
-        <div class="card-title mb-3 mt-4">System Info</div>
-        <div class="status-row"><span class="status-label">Version</span><span class="status-value">v1.3.0</span></div>
-        <div class="status-row"><span class="status-label">Uptime</span><span class="status-value" id="set-uptime">--</span></div>
-        <div class="status-row"><span class="status-label">WS Clients</span><span class="status-value" id="set-ws-clients">0</span></div>
-        <div class="status-row"><span class="status-label">Assets Tracked</span><span class="status-value" id="set-assets">8</span></div>
+        <div class="card-title mb-3 mt-4">Sistem Bilgisi</div>
+        <div class="status-row"><span class="status-label">Versiyon</span><span class="status-value">v1.4.0</span></div>
+        <div class="status-row"><span class="status-label">Çalışma Süresi</span><span class="status-value" id="set-uptime">--</span></div>
+        <div class="status-row"><span class="status-label">WS İstemci</span><span class="status-value" id="set-ws-clients">0</span></div>
+        <div class="status-row"><span class="status-label">Takip Edilen</span><span class="status-value" id="set-assets">35</span></div>
       </div>
     </div>
   </div>
@@ -409,9 +484,36 @@
         <div style="background:var(--bg-card);border:1px solid var(--border-primary);border-radius:var(--radius-md);padding:14px 16px;">
           <div style="font-size:12px;font-weight:700;margin-bottom:3px;">💳 Funder Adresi <span style="color:var(--text-muted);font-size:10px;">OPSİYONEL</span></div>
           <div style="font-size:10px;color:var(--text-muted);margin-bottom:8px;line-height:1.6;">
-            İşlemleri finanse eden EVM cüzdanının <strong>genel adresi</strong> (0x...). MetaMask hesap adresiniz veya Polymarket profil adresiniz. Farklı bir funder cüzdanı kullanmıyorsanız boş bırakabilirsiniz.
+            İşlemleri finanse eden EVM cüzdanının <strong>genel adresi</strong> (0x...).
           </div>
           <input type="text" class="form-input" id="cfg-funder" placeholder="Örn: 0xAbCd1234...7890" style="width:100%;box-sizing:border-box;">
+        </div>
+
+        <!-- Relayer Bölümü -->
+        <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border-primary);">
+          <div style="font-size:13px;font-weight:800;color:var(--accent-purple);margin-bottom:12px;">🔗 Relayer Ayarları</div>
+          <div style="font-size:10px;color:var(--text-muted);margin-bottom:12px;line-height:1.6;">
+            Relayer, Polymarket'in gasless claim/redeem servisidir. Kazanan pozisyonların USDC'sini gas fee ödemeden tahsil etmek için gereklidir.
+            <strong style="color:var(--text-secondary);">polymarket.com → Settings → API</strong> bölümünden alabilirsiniz. Trade (alım/satım) için gerekli değildir.
+            <br><span style="color:var(--accent-yellow);font-weight:600;">Otomatik Tahsilat özelliği bu alanlar doldurulmadan aktif edilemez.</span>
+          </div>
+        </div>
+
+        <!-- Relayer API Key -->
+        <div style="background:var(--bg-card);border:1px solid var(--border-primary);border-radius:var(--radius-md);padding:14px 16px;">
+          <div style="font-size:12px;font-weight:700;margin-bottom:3px;">🔑 Relayer API Key <span style="color:var(--accent-yellow);font-size:10px;">OTO CLAIM/REDEEM İÇİN ZORUNLU</span></div>
+          <div style="font-size:10px;color:var(--text-muted);margin-bottom:8px;">Polymarket relayer servisi API anahtarı. UUID formatında.</div>
+          <div style="position:relative;">
+            <input type="password" class="form-input" id="cfg-relayer-key" placeholder="Örn: 019d2c18-fbfe-7779-..." style="width:100%;padding-right:40px;box-sizing:border-box;">
+            <button onclick="toggleKeyVisibility('cfg-relayer-key')" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:13px;padding:2px 4px;">👁</button>
+          </div>
+        </div>
+
+        <!-- Relayer Address -->
+        <div style="background:var(--bg-card);border:1px solid var(--border-primary);border-radius:var(--radius-md);padding:14px 16px;margin-top:12px;">
+          <div style="font-size:12px;font-weight:700;margin-bottom:3px;">📍 Relayer Adresi <span style="color:var(--accent-yellow);font-size:10px;">OTO CLAIM/REDEEM İÇİN ZORUNLU</span></div>
+          <div style="font-size:10px;color:var(--text-muted);margin-bottom:8px;">Polymarket relayer cüzdan adresi (0x...).</div>
+          <input type="text" class="form-input" id="cfg-relayer-addr" placeholder="Örn: 0xa4cc79139c90f95dca..." style="width:100%;box-sizing:border-box;">
         </div>
       </div>
 

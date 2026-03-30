@@ -11,32 +11,43 @@ ENV_FILE = BASE_DIR / ".env"
 load_dotenv(ENV_FILE)
 
 DEFAULT_SETTINGS = {
+    # Genel
     "mode": "PAPER",
     "port": 8002,
+    "auto_start": False,
+    "notifications_enabled": True,
+    # Giris kurallari
     "time_rule_threshold": 90,
     "min_entry_seconds": 10,
     "min_entry_price": 0.75,
     "max_entry_price": 0.98,
-    "target_exit_price": 0.90,
-    "stop_loss_price": 0.80,
-    "target_exit_pct": 20.0,
-    "stop_loss_pct": 15.0,
-    "exit_mode": "NUMERIC",
     "min_btc_move_up": 70.0,
     "min_btc_move_down": 70.0,
     "max_slippage_pct": 0.03,
-    "order_amount": 2.0,
-    "order_amount_pct": 10.0,
-    "amount_mode": "USD",
-    "event_trade_limit": 1,
-    "max_open_positions": 1,
-    "sell_retry_count": 200,
-    "sell_retry_interval": 1,
-    "auto_start": False,
-    "auto_claim": True,
+    # Cikis kurallari
+    "target_exit_price": 0.90,
+    "stop_loss_price": 0.50,
+    "stop_loss_enabled": True,
     "force_sell_enabled": True,
     "force_sell_before_resolution_seconds": 15,
-    "btc_price_source": "BINANCE",
+    "sell_retry_count": 200,
+    "sell_retry_interval": 1,
+    # Trade motoru
+    "order_amount": 2.0,
+    "buy_order_type": "MARKET",
+    "sell_order_type": "MARKET",
+    "event_trade_limit": 1,
+    "max_open_positions": 1,
+    "max_total_trades": 0,
+    "one_trade_per_event": True,
+    "auto_claim": True,
+    # Eski uyumluluk
+    "target_exit_pct": 20.0,
+    "stop_loss_pct": 15.0,
+    "exit_mode": "NUMERIC",
+    "order_amount_pct": 10.0,
+    "amount_mode": "USD",
+    "btc_price_source": "POLYMARKET",
     "theme": "polymarket",
 }
 
@@ -63,4 +74,6 @@ def get_wallet_config() -> dict:
         "passphrase": os.getenv("POLYMARKET_PASSPHRASE", ""),
         "funder": os.getenv("POLYMARKET_FUNDER", ""),
         "sig_type": int(os.getenv("POLYMARKET_SIG_TYPE", "2")),
+        "relayer_api_key": os.getenv("POLYMARKET_RELAYER_API_KEY", ""),
+        "relayer_address": os.getenv("POLYMARKET_RELAYER_ADDRESS", ""),
     }
