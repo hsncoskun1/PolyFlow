@@ -183,8 +183,8 @@ async def simulation_tick():
                 clob_dn_ask  = mp.get("down_ask", 0)
                 gamma_up     = real.get("up_price", 0.5)
                 gamma_dn     = real.get("down_price", 0.5)
-                # Mantikli aralik: 0.01 – 0.99
-                def _valid(v): return v is not None and 0.01 <= v <= 0.99
+                # Mantikli aralik: 0.05 – 0.95 (event sonu 0.01/0.99 spike'larini filtrele)
+                def _valid(v): return v is not None and 0.05 <= v <= 0.95
                 up_price   = clob_up_mid if _valid(clob_up_mid) else (clob_up_ask if _valid(clob_up_ask) else gamma_up)
                 down_price = clob_dn_mid if _valid(clob_dn_mid) else (clob_dn_ask if _valid(clob_dn_ask) else gamma_dn)
 
@@ -791,12 +791,14 @@ async def _ptb_loop():
                 if not slug:
                     continue
 
-                # Slug degistiyse (yeni event) → eski PTB'yi sifirla
+                # Slug degistiyse (yeni event) → eski PTB'yi sifirla, hemen yeni fetch
                 old_slug = _ptb_slug_map.get(key, "")
-                if old_slug and old_slug != slug:
+                slug_changed = old_slug and old_slug != slug
+                if slug_changed:
                     _ptb_locked.pop(key, None)
                     _ptb_cache.pop(key, None)
                     _ptb_slug_map[key] = slug
+                    addlog("info", f"Yeni slug: {key} — PTB sifirlandi, aninda fetch deneniyor")
 
                 # Zaten bu slug icin kilitliyse atla
                 if _ptb_locked.get(key):
@@ -827,6 +829,21 @@ async def _ptb_loop():
                     _ptb_locked[key] = True
                     _ptb_slug_map[key] = slug
                     addlog("success", f"PTB kilitlendi: {key} = ${ptb:,.2f}")
+                elif slug_changed:
+                    # Yeni event PTB'si henuz hazir degil — 2sn sonra hemen tekrar dene
+                    # NOT: Eski PTB asla kullanilmaz — her zaman Polymarket'ten taze deger gerekir
+                    await asyncio.sleep(2)
+                    ptb2 = await _fetch_ptb_next_data(slug, sym, variant)
+                    if not ptb2:
+                        ptb2 = await _fetch_ptb_gamma(slug)
+                    if ptb2 and ptb2 > 0:
+                        _ptb_cache[key] = ptb2
+                        _ptb_locked[key] = True
+                        _ptb_slug_map[key] = slug
+                        addlog("success", f"PTB 2. deneme basarili: {key} = ${ptb2:,.2f}")
+                    else:
+                        # PTB alinamadi — delta '...' gosterilecek (stale deger kullanilmaz)
+                        addlog("info", f"PTB bekleniyor: {key} (sonraki dongu deneyecek)")
 
                 # Rate limit korumasi: her event arasi 0.5sn bekle
                 await asyncio.sleep(0.5)
@@ -1120,18 +1137,22 @@ async def clob_ws_connect():
                             a = _clob_prices[tid].get("best_ask", 0)
                             if not p:
                                 return
+                            # NOT: up_mid / down_mid sadece REST midpoint poll tarafindan yazilir
+                            # (WS bid/ask event sonunda 0.01/0.99 spike yapar — up_mid'e yazarsak
+                            #  simulation_tick yanlis fiyat hesaplar)
                             if side == "up":
                                 _asset_market[mkey]["up_ask"] = round(a if a > 0 else p, 4)
                                 _asset_market[mkey]["up_bid"] = round(b if b > 0 else p - 0.005, 4)
-                                _asset_market[mkey]["up_mid"] = round(p, 4)
+                                # up_mid: sadece REST poll yazsın, WS yazmaz
                             else:
                                 _asset_market[mkey]["down_ask"] = round(a if a > 0 else p, 4)
                                 _asset_market[mkey]["down_bid"] = round(b if b > 0 else p - 0.005, 4)
-                                _asset_market[mkey]["down_mid"] = round(p, 4)
-                            # Spread = up_ask + down_ask - 1
-                            ua = _asset_market[mkey].get("up_ask", 0.5)
-                            da = _asset_market[mkey].get("down_ask", 0.5)
-                            _asset_market[mkey]["slippage_pct"] = round(max(0, (ua + da - 1) * 100), 2)
+                                # down_mid: sadece REST poll yazsın, WS yazmaz
+                            # Spread — midpoint bazli (REST poll'dan gelen up_mid/down_mid ile)
+                            um = _asset_market[mkey].get("up_mid", 0)
+                            dm = _asset_market[mkey].get("down_mid", 0)
+                            if um > 0 and dm > 0:
+                                _asset_market[mkey]["slippage_pct"] = round(max(0, (um + dm - 1) * 100), 2)
 
                         # ── Format 1: {price_changes: [{asset_id, price, best_bid, best_ask}]}
                         # ── Format 2: [{asset_id, price, best_bid, best_ask}] (array snapshot)
@@ -1172,11 +1193,11 @@ async def clob_ws_connect():
         await asyncio.sleep(5)  # Reconnect delay
 
 
-# ─── CLOB PRICE POLL (Referans botla ayni: buy price = Polymarket butonu degeri) ─
+# ─── CLOB PRICE POLL (Sadece /midpoint — stabil, event sonu seesawing olmaz) ──
 async def clob_midpoint_poll():
-    """Her 3 saniyede CLOB REST'ten UP/DOWN buy price cek.
-    /price?side=buy → Polymarket UI'daki buton degeri (market order fill price).
-    Referans bot da bu degeri kullanir."""
+    """Her 3 saniyede CLOB REST'ten UP/DOWN midpoint fiyati cek.
+    /midpoint → (best_bid + best_ask) / 2 — Stabil, event sonu spike olmaz.
+    NOT: /price?side=buy event sonunda 0.01↔0.75 arasin da seesiyor — kullanilmiyor."""
     CLOB_BASE = "https://clob.polymarket.com"
     while True:
         try:
@@ -1191,32 +1212,29 @@ async def clob_midpoint_poll():
                     continue
                 up_tid, dn_tid = tokens[0], tokens[1]
                 try:
-                    async with httpx.AsyncClient(timeout=3.0) as c:
-                        # /price?side=buy = market order buy price = Polymarket UI butonu
-                        r_up_buy  = await c.get(f"{CLOB_BASE}/price", params={"token_id": up_tid,  "side": "buy"})
-                        r_dn_buy  = await c.get(f"{CLOB_BASE}/price", params={"token_id": dn_tid, "side": "buy"})
+                    async with httpx.AsyncClient(timeout=4.0) as c:
+                        # Sadece midpoint — 2 request/market (eskiden 4 idi, yarı yarıya azaltıldı)
                         r_up_mid  = await c.get(f"{CLOB_BASE}/midpoint", params={"token_id": up_tid})
                         r_dn_mid  = await c.get(f"{CLOB_BASE}/midpoint", params={"token_id": dn_tid})
 
-                    if r_up_buy.status_code == 200 and r_dn_buy.status_code == 200:
-                        up_buy = float(r_up_buy.json().get("price", 0))
-                        dn_buy = float(r_dn_buy.json().get("price", 0))
-                        up_mid_val = float(r_up_mid.json().get("mid", 0)) if r_up_mid.status_code == 200 else 0
-                        dn_mid_val = float(r_dn_mid.json().get("mid", 0)) if r_dn_mid.status_code == 200 else 0
+                    up_mid_val = float(r_up_mid.json().get("mid", 0)) if r_up_mid.status_code == 200 else 0
+                    dn_mid_val = float(r_dn_mid.json().get("mid", 0)) if r_dn_mid.status_code == 200 else 0
 
-                        if up_buy > 0 and dn_buy > 0:
-                            if key not in _asset_market:
-                                _asset_market[key] = {}
-                            # up_ask = buy price (Polymarket UI ile eslesen deger)
-                            _asset_market[key]["up_ask"]   = round(up_buy, 4)
-                            _asset_market[key]["down_ask"] = round(dn_buy, 4)
-                            # midpoint = (buy+sell)/2 yaklasimi — bid olarak kullan
-                            _asset_market[key]["up_mid"]   = round(up_mid_val, 4) if up_mid_val else round(up_buy - 0.02, 4)
-                            _asset_market[key]["down_mid"] = round(dn_mid_val, 4) if dn_mid_val else round(dn_buy - 0.02, 4)
-                            _asset_market[key]["up_bid"]   = round(up_mid_val - 0.005, 4) if up_mid_val else round(up_buy - 0.025, 4)
-                            _asset_market[key]["down_bid"] = round(dn_mid_val - 0.005, 4) if dn_mid_val else round(dn_buy - 0.025, 4)
-                            # Spread = up_ask + down_ask - 1
-                            _asset_market[key]["slippage_pct"] = round(max(0, (up_buy + dn_buy - 1) * 100), 2)
+                    # Sadece makul aralik (event sonu spike'lari filtrele: 0.05-0.95)
+                    def _mid_valid(v): return 0.05 <= v <= 0.95
+
+                    if _mid_valid(up_mid_val) and _mid_valid(dn_mid_val):
+                        if key not in _asset_market:
+                            _asset_market[key] = {}
+                        # up_ask = up_mid = midpoint (stabil referans fiyat)
+                        _asset_market[key]["up_ask"]    = round(up_mid_val, 4)
+                        _asset_market[key]["up_mid"]    = round(up_mid_val, 4)
+                        _asset_market[key]["down_ask"]  = round(dn_mid_val, 4)
+                        _asset_market[key]["down_mid"]  = round(dn_mid_val, 4)
+                        _asset_market[key]["up_bid"]    = round(up_mid_val - 0.005, 4)
+                        _asset_market[key]["down_bid"]  = round(dn_mid_val - 0.005, 4)
+                        # Spread — midpoint bazli (up + down ≈ 1.0 civarinda olmali)
+                        _asset_market[key]["slippage_pct"] = round(max(0, (up_mid_val + dn_mid_val - 1) * 100), 2)
                 except Exception:
                     pass
                 await asyncio.sleep(0.15)
