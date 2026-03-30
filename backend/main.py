@@ -174,17 +174,18 @@ async def simulation_tick():
                 mp    = _asset_market.get(key, {})
 
                 # Fiyat kaynagi onceligine gore:
-                # 1) CLOB midpoint (REST poll — en dogru, her 3sn guncelleniyor)
-                # 2) CLOB WS best_ask (anlık ama stale kalabilir)
+                # 1) CLOB midpoint (REST poll — EMA yumusatmali, her 3sn)
+                # 2) CLOB WS best_ask (anlık ama stale / spike olabilir)
                 # 3) Gamma outcomePrices (en stale — son care)
+                # NOT: Son 20sn price lock aktif — WS ve REST poll guncelleme yapmaz
                 clob_up_mid  = mp.get("up_mid",   0)
                 clob_dn_mid  = mp.get("down_mid", 0)
                 clob_up_ask  = mp.get("up_ask",   0)
                 clob_dn_ask  = mp.get("down_ask", 0)
                 gamma_up     = real.get("up_price", 0.5)
                 gamma_dn     = real.get("down_price", 0.5)
-                # Mantikli aralik: 0.05 – 0.95 (event sonu 0.01/0.99 spike'larini filtrele)
-                def _valid(v): return v is not None and 0.05 <= v <= 0.95
+                # Aralik: 0.02 – 0.98 (genis — EMA zaten yumusatıyor, lock zaten koruyuyor)
+                def _valid(v): return v is not None and 0.02 <= v <= 0.98
                 up_price   = clob_up_mid if _valid(clob_up_mid) else (clob_up_ask if _valid(clob_up_ask) else gamma_up)
                 down_price = clob_dn_mid if _valid(clob_dn_mid) else (clob_dn_ask if _valid(clob_dn_ask) else gamma_dn)
 
@@ -549,7 +550,7 @@ async def scan_slug_based():
                                     "down_bid": round(pick["down_price"] - 0.005, 3),
                                     "down_ask": pick["down_price"],
                                     "slippage_pct": 1.2,
-                                    "up_mid": 0.0, "down_mid": 0.0,
+                                    "up_mid": 0.5, "down_mid": 0.5,
                                 }
                             total += 1
                         else:
@@ -949,16 +950,16 @@ async def scan_gamma_markets():
                 new_cache[key] = pick
 
                 # Slug degistiyse (yeni 5dk event basladiysa) _asset_market temizle
-                # ve CLOB midpoint poll hemen gercek fiyati yazacak
+                # up_mid = 0.5 (tarafsiz baslangic) — 0.0 olsaydi EMA'siz ani ziplama olurdu
                 if slug_changed or key not in _asset_market:
                     _asset_market[key] = {
                         "up_bid": round(pick["up_price"] - 0.005, 3),
-                        "up_ask": pick["up_price"],   # gecici — midpoint poll uzersine yazacak
+                        "up_ask": pick["up_price"],
                         "down_bid": round(pick["down_price"] - 0.005, 3),
                         "down_ask": pick["down_price"],
                         "slippage_pct": 1.2,
-                        "up_mid": 0.0,    # henuz bilinmiyor, midpoint poll dolduracak
-                        "down_mid": 0.0,
+                        "up_mid": 0.5,    # tarafsiz baslangic — EMA buradan gercek degere kayar
+                        "down_mid": 0.5,
                     }
                     if slug_changed:
                         addlog("info", f"Yeni event: {key} {old_slug} -> {new_slug} | market reset")
@@ -1137,18 +1138,21 @@ async def clob_ws_connect():
                             a = _clob_prices[tid].get("best_ask", 0)
                             if not p:
                                 return
-                            # NOT: up_mid / down_mid sadece REST midpoint poll tarafindan yazilir
-                            # (WS bid/ask event sonunda 0.01/0.99 spike yapar — up_mid'e yazarsak
-                            #  simulation_tick yanlis fiyat hesaplar)
+                            # PRICE LOCK: Event son 20 saniyesinde WS guncelleme yapma
+                            ev_info = _market_cache.get(mkey)
+                            if ev_info:
+                                ev_remaining = ev_info.get("end_ts", 0) - time.time()
+                                if 0 < ev_remaining < 25:
+                                    return  # fiyati dondur — seesawing onle
+                            # NOT: up_mid sadece REST midpoint poll tarafindan yazilir
+                            # WS bid/ask event sonunda 0.01/0.99 spike yapabilir
                             if side == "up":
                                 _asset_market[mkey]["up_ask"] = round(a if a > 0 else p, 4)
                                 _asset_market[mkey]["up_bid"] = round(b if b > 0 else p - 0.005, 4)
-                                # up_mid: sadece REST poll yazsın, WS yazmaz
                             else:
                                 _asset_market[mkey]["down_ask"] = round(a if a > 0 else p, 4)
                                 _asset_market[mkey]["down_bid"] = round(b if b > 0 else p - 0.005, 4)
-                                # down_mid: sadece REST poll yazsın, WS yazmaz
-                            # Spread — midpoint bazli (REST poll'dan gelen up_mid/down_mid ile)
+                            # Spread — REST poll'dan gelen up_mid/down_mid ile
                             um = _asset_market[mkey].get("up_mid", 0)
                             dm = _asset_market[mkey].get("down_mid", 0)
                             if um > 0 and dm > 0:
@@ -1207,34 +1211,49 @@ async def clob_midpoint_poll():
                 info = _market_cache.get(key)
                 if not info:
                     continue
+
+                # ── PRICE LOCK: Event son 25 saniyesinde fiyati dondur ──
+                # CLOB orderbook bu sure zarfinda cok ince, midpoint 0.01↔0.99 seesawing yapar
+                # Ayrica Polymarket yeni slug'i ~10sn onceden yayinliyor — 25sn yetisir
+                end_ts = info.get("end_ts", 0)
+                remaining = end_ts - time.time()
+                if 0 < remaining < 25:
+                    await asyncio.sleep(0.05)
+                    continue  # fiyati guncelleme — son deger kilitli
+
                 tokens = info.get("tokens", [])
                 if len(tokens) < 2:
                     continue
                 up_tid, dn_tid = tokens[0], tokens[1]
                 try:
                     async with httpx.AsyncClient(timeout=4.0) as c:
-                        # Sadece midpoint — 2 request/market (eskiden 4 idi, yarı yarıya azaltıldı)
+                        # Sadece midpoint — 2 request/market
                         r_up_mid  = await c.get(f"{CLOB_BASE}/midpoint", params={"token_id": up_tid})
                         r_dn_mid  = await c.get(f"{CLOB_BASE}/midpoint", params={"token_id": dn_tid})
 
                     up_mid_val = float(r_up_mid.json().get("mid", 0)) if r_up_mid.status_code == 200 else 0
                     dn_mid_val = float(r_dn_mid.json().get("mid", 0)) if r_dn_mid.status_code == 200 else 0
 
-                    # Sadece makul aralik (event sonu spike'lari filtrele: 0.05-0.95)
-                    def _mid_valid(v): return 0.05 <= v <= 0.95
+                    # Mantikli aralik: 0.02-0.98 (daha genis — gercek yaklasin-cozum degerlerine izin ver)
+                    def _mid_valid(v): return 0.02 <= v <= 0.98
 
                     if _mid_valid(up_mid_val) and _mid_valid(dn_mid_val):
                         if key not in _asset_market:
                             _asset_market[key] = {}
-                        # up_ask = up_mid = midpoint (stabil referans fiyat)
-                        _asset_market[key]["up_ask"]    = round(up_mid_val, 4)
-                        _asset_market[key]["up_mid"]    = round(up_mid_val, 4)
-                        _asset_market[key]["down_ask"]  = round(dn_mid_val, 4)
-                        _asset_market[key]["down_mid"]  = round(dn_mid_val, 4)
-                        _asset_market[key]["up_bid"]    = round(up_mid_val - 0.005, 4)
-                        _asset_market[key]["down_bid"]  = round(dn_mid_val - 0.005, 4)
-                        # Spread — midpoint bazli (up + down ≈ 1.0 civarinda olmali)
-                        _asset_market[key]["slippage_pct"] = round(max(0, (up_mid_val + dn_mid_val - 1) * 100), 2)
+                        # EMA yumusatma: ani ziplama onle (alpha=0.5 → yuzde 50 eski, 50 yeni)
+                        old_up  = _asset_market[key].get("up_mid", 0)
+                        old_dn  = _asset_market[key].get("down_mid", 0)
+                        alpha   = 0.5
+                        sm_up   = round(old_up * (1-alpha) + up_mid_val * alpha, 4) if old_up > 0.01 else round(up_mid_val, 4)
+                        sm_dn   = round(old_dn * (1-alpha) + dn_mid_val * alpha, 4) if old_dn > 0.01 else round(dn_mid_val, 4)
+
+                        _asset_market[key]["up_ask"]    = sm_up
+                        _asset_market[key]["up_mid"]    = sm_up
+                        _asset_market[key]["down_ask"]  = sm_dn
+                        _asset_market[key]["down_mid"]  = sm_dn
+                        _asset_market[key]["up_bid"]    = round(sm_up - 0.005, 4)
+                        _asset_market[key]["down_bid"]  = round(sm_dn - 0.005, 4)
+                        _asset_market[key]["slippage_pct"] = round(max(0, (sm_up + sm_dn - 1) * 100), 2)
                 except Exception:
                     pass
                 await asyncio.sleep(0.15)

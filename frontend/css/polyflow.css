@@ -887,11 +887,11 @@ html, body {
 .page { display: none; }
 .page.active { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 
-/* ═══════════════ FLASH ANIMATIONS ═══════════════ */
+/* ═══════════════ FLASH ANIMATIONS (devre disi — goz yorucu) ═══════════════ */
 @keyframes flash-g { 0%,100%{color:inherit} 30%{color:var(--accent-green)} }
 @keyframes flash-r { 0%,100%{color:inherit} 30%{color:var(--accent-red)} }
-.flash-green { animation: flash-g 0.4s ease; }
-.flash-red   { animation: flash-r 0.4s ease; }
+.flash-green { animation: none; }
+.flash-red   { animation: none; }
 
 /* ═══════════════ UTILITIES ═══════════════ */
 .text-green { color: var(--accent-green); }
@@ -2655,13 +2655,13 @@ body.modal-open { overflow: hidden; }
 .eac-rb.rb-fail .eac-rb-main { color: var(--accent-red); }
 .eac-rb.rb-waiting .eac-rb-main { color: var(--text-secondary); }
 
-/* Value update flash */
+/* Value update flash — devre disi (goz yorucu sarı yanıp sönme) */
 @keyframes rbValueFlash {
   0%   { color: var(--accent-yellow) !important; }
   100% { color: inherit; }
 }
 .rb-val-flash {
-  animation: rbValueFlash 0.45s ease-out;
+  animation: none;
 }
 
 /* Slippage disabled badge */
