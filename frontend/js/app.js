@@ -773,14 +773,15 @@ function renderEventCard(key) {
 
   const st = getAssetStrategy(key);
   const hasCustomSettings = !!(state.assetSettings[key]);
+  const settingsConfigured = a.settings_configured !== false; // backend'den gelir, yoksa true kabul et
   const spreadDisabled = (st.max_slippage_pct || 0.03) >= 0.5;
 
   const passCount = ruleKeys.filter(k => {
     if (k === 'slippage' && spreadDisabled) return true;
     return rules[k] === 'pass';
   }).length;
-  const allPass    = passCount === 6;
-  const countColor = allPass ? 'all-pass' : passCount >= 4 ? 'waiting' : 'has-fail';
+  const allPass    = settingsConfigured && passCount === 6;
+  const countColor = !settingsConfigured ? 'has-fail' : allPass ? 'all-pass' : passCount >= 4 ? 'waiting' : 'has-fail';
 
   const refPrice  = a.event?.open_reference || a.price;
   const priceDiff = a.price - refPrice;
@@ -914,10 +915,10 @@ function renderEventCard(key) {
           </div>
           <div class="eac-hdr-gap"></div>
           ${pinned
-            ? `<button class="eac-settings-quick${hasCustomSettings ? ' custom' : ''}"
+            ? `<button class="eac-settings-quick${!settingsConfigured ? ' needs-settings' : hasCustomSettings ? ' custom' : ''}"
                  onclick="event.stopPropagation(); openAssetSettings('${key}')"
-                 title="${hasCustomSettings ? 'Özel ayar aktif' : 'Bu asset için ayar yap'}">
-                 Ayarlar${hasCustomSettings ? ' ✦' : ''}
+                 title="${!settingsConfigured ? '⚠️ Ayar gerekli — bot bu event\'te işlem açamaz!' : hasCustomSettings ? 'Özel ayar aktif' : 'Bu event için ayar yap'}">
+                 ${!settingsConfigured ? '⚠️ Ayar Gerekli' : hasCustomSettings ? 'Ayarlar ✦' : 'Ayarlar'}
                </button>`
             : ''
           }`
@@ -933,23 +934,28 @@ function renderEventCard(key) {
 // Yeni eventlerde alanlar boş gösterilir (sadece silik placeholder).
 // Tüm alanlar doldurulmadan kayıt yapılamaz.
 
+// min/max: kullanıcıya gösterilen birimde (% alanlar zaten ×100 gösterilir)
 const EVENT_SETTING_FIELDS = [
-  { key:'min_entry_price',                    label:'Min Giriş Fiyatı',             unit:'0–1',   placeholder:'örn: 0.76',  hint:'UP token minimum olasılığı (örn. 0.76 = %76)' },
-  { key:'max_entry_price',                    label:'Max Giriş Fiyatı',             unit:'0–1',   placeholder:'örn: 0.97',  hint:'UP token maksimum olasılığı (örn. 0.97 = %97)' },
-  { key:'time_rule_threshold',                label:'Max Entry Süresi',             unit:'sn',    placeholder:'örn: 90',    hint:'Event bitişine max kaç saniye kaldığında giriş yap (örn. 90)' },
-  { key:'min_entry_seconds',                  label:'Min Entry Süresi',             unit:'sn',    placeholder:'örn: 20',    hint:'Event bitişine en az kaç saniye kalmalı (örn. 20)' },
-  { key:'min_move_delta',                     label:'Min Fiyat Hareketi',           unit:'delta', placeholder:'örn: 0.02',  hint:'UP fiyatının 0.50\'den minimum sapması (örn. 0.02 = %2 hareket)' },
-  { key:'max_slippage_pct',                   label:'Max Spread',                   unit:'%',     placeholder:'örn: 3',     hint:'Bid-ask spread yüzdesi (örn. 3 = %3). 50+ devre dışı bırakır.' },
-  { key:'event_trade_limit',                  label:'Event Başına Max İşlem',       unit:'adet',  placeholder:'örn: 1',     hint:'Bu event penceresinde açılabilecek max pozisyon (örn. 1)' },
-  { key:'max_open_positions',                 label:'Toplam Max Açık Pozisyon',     unit:'adet',  placeholder:'örn: 1',     hint:'Tüm eventlerde aynı anda max kaç pozisyon açık olabilir' },
-  { key:'order_amount',                       label:'İşlem Miktarı',                unit:'$',     placeholder:'örn: 2',     hint:'Her işlemde kullanılacak USDC miktarı' },
-  { key:'target_exit_price',                  label:'Hedef Çıkış Fiyatı',          unit:'0–1',   placeholder:'örn: 0.90',  hint:'Bu fiyata ulaşınca otomatik kapat (örn. 0.90 = %90)' },
-  { key:'stop_loss_price',                    label:'Stop Loss Fiyatı',             unit:'0–1',   placeholder:'örn: 0.80',  hint:'Bu fiyatın altına düşünce zararı kes (örn. 0.80 = %80)' },
-  { key:'force_sell_before_resolution_seconds',label:'Force Sell Süresi',           unit:'sn',    placeholder:'örn: 15',    hint:'Event bitmeden kaç saniye önce pozisyon zorla kapatılsın' },
+  { key:'min_entry_price',                     label:'Min Giriş Fiyatı',            unit:'%',  placeholder:'örn: 76',  min:50,  max:99,    step:'1',   hint:'UP token min olasılık eşiği. 76 = %76 anlamına gelir. Altında işlem açılmaz.' },
+  { key:'max_entry_price',                     label:'Max Giriş Fiyatı',            unit:'%',  placeholder:'örn: 97',  min:51,  max:99,    step:'1',   hint:'UP token max olasılık eşiği. 97 = %97 anlamına gelir. Üzerinde işlem açılmaz.' },
+  { key:'time_rule_threshold',                 label:'Max Entry Süresi',            unit:'sn', placeholder:'örn: 90',  min:10,  max:300,   step:'5',   hint:'Event bitişine max kaç saniye kaldığında giriş yapılabilir (örn. 90 saniye).' },
+  { key:'min_entry_seconds',                   label:'Min Entry Süresi',            unit:'sn', placeholder:'örn: 20',  min:0,   max:120,   step:'1',   hint:'Event bitişine en az kaç saniye kalmalı. Bu süreden az kaldıysa giriş yapılmaz.' },
+  { key:'min_move_delta',                      label:'Min Fiyat Hareketi',          unit:'%',  placeholder:'örn: 2',   min:0,   max:30,    step:'0.5', hint:'UP fiyatının %50\'den minimum sapması. 2 = %2 hareket gerekli.' },
+  { key:'max_slippage_pct',                    label:'Max Spread',                  unit:'%',  placeholder:'örn: 3',   min:0.5, max:50,    step:'0.5', hint:'Bid-ask spread üst sınırı. 3 = %3. 50 girersen kural devre dışı kalır.' },
+  { key:'event_trade_limit',                   label:'Event Başına Max İşlem',      unit:'↺',  placeholder:'örn: 1',   min:1,   max:10,    step:'1',   hint:'Bu event penceresinde açılabilecek maksimum pozisyon sayısı.' },
+  { key:'max_open_positions',                  label:'Toplam Max Açık Pozisyon',    unit:'↺',  placeholder:'örn: 1',   min:1,   max:20,    step:'1',   hint:'Tüm eventlerde aynı anda açık kalabilecek toplam maksimum pozisyon.' },
+  { key:'order_amount',                        label:'İşlem Miktarı',               unit:'$',  placeholder:'örn: 2',   min:1,   max:10000, step:'0.5', hint:'Her işlemde kullanılacak USDC miktarı (örn. 2 = $2 USDC).' },
+  { key:'target_exit_price',                   label:'Hedef Çıkış Fiyatı',         unit:'%',  placeholder:'örn: 90',  min:51,  max:99,    step:'1',   hint:'UP token bu fiyata ulaşınca pozisyon otomatik kapatılır. 90 = %90.' },
+  { key:'stop_loss_price',                     label:'Stop Loss Fiyatı',            unit:'%',  placeholder:'örn: 80',  min:1,   max:99,    step:'1',   hint:'UP token bu fiyatın altına düşünce zararı kes. 80 = %80.' },
+  { key:'force_sell_before_resolution_seconds',label:'Force Sell Süresi',           unit:'sn', placeholder:'örn: 15',  min:0,   max:120,   step:'1',   hint:'Event bitmeden kaç saniye önce pozisyon zorla kapatılsın (örn. 15 saniye).' },
 ];
 
-// % olarak girilen alanlar → backend'e decimal gönderilir (÷100)
-const _pctFields = new Set(['max_slippage_pct']);
+// Kullanıcı 0-100 (%) girer → backend'e 0-1 olarak gönderilir (÷100)
+// Kullanıcı 0-1 olan değeri okurken → 0-100 olarak gösterilir (×100)
+const _pctFields = new Set([
+  'min_entry_price','max_entry_price','target_exit_price','stop_loss_price',
+  'min_move_delta','max_slippage_pct'
+]);
 
 function openAssetSettings(key) {
   const a = state.assets[key];
@@ -963,17 +969,22 @@ function openAssetSettings(key) {
   const fld = (f) => {
     let raw = saved ? saved[f.key] : undefined;
     const hasVal = raw !== undefined && raw !== null && raw !== '';
-    // Yüzde alanları kullanıcıya büyük sayı olarak gösterilir (0.03 → 3)
-    const dispVal = (hasVal && _pctFields.has(f.key)) ? (Number(raw) * 100).toFixed(1) : (hasVal ? raw : '');
+    // % alanlar: backend 0-1 saklar, kullanıcıya 0-100 gösterilir (0.76 → 76)
+    const dispVal = (hasVal && _pctFields.has(f.key))
+      ? (Number(raw) * 100).toFixed(Number(raw) % 1 === 0 ? 0 : 1)
+      : (hasVal ? raw : '');
     return `<div class="as-field">
       <label class="as-label">${f.label} <span class="as-unit">${f.unit}</span></label>
       <input class="as-input${hasVal ? ' has-value' : ''}"
              id="esf-${key}-${f.key}"
-             type="number" step="any"
+             type="number"
+             step="${f.step || 'any'}"
+             min="${f.min ?? ''}"
+             max="${f.max ?? ''}"
              value="${dispVal}"
              placeholder="${f.placeholder}"
              oninput="onEventSettingInput('${key}')" />
-      <span class="as-hint">${f.hint}</span>
+      <span class="as-hint">${f.min !== undefined ? `[${f.min}–${f.max}] ` : ''}${f.hint}</span>
     </div>`;
   };
 
@@ -986,7 +997,7 @@ function openAssetSettings(key) {
       <div class="as-title">${a.name} · ${tfLabel} — Strateji Ayarları</div>
       <div class="as-sub${isNew ? ' as-sub-new' : ''}">
         ${isNew
-          ? '⚠️ Bu event için henüz ayar kaydedilmemiş. Bot şu an global ayarları kullanıyor. Tüm alanları doldurarak kaydedin.'
+          ? '⚠️ Bu event için henüz ayar kaydedilmemiş. Ayarlarınızı kaydetmeden bot bu event\'te işlem açamaz. Tüm alanları doldurun.'
           : '✏️ Bu event\'e özel ayarlar aktif. Değiştirip kaydedebilir veya Temizle ile silebilirsiniz.'}
       </div>
     </div>
@@ -1023,12 +1034,25 @@ function openAssetSettings(key) {
 function onEventSettingInput(key) {
   const btn = document.getElementById(`esf-save-${key}`);
   if (!btn) return;
-  const allFilled = EVENT_SETTING_FIELDS.every(f => {
+  let allValid = true;
+  EVENT_SETTING_FIELDS.forEach(f => {
     const el = document.getElementById(`esf-${key}-${f.key}`);
-    return el && el.value.trim() !== '' && !isNaN(parseFloat(el.value));
+    if (!el) { allValid = false; return; }
+    const v = parseFloat(el.value);
+    const isEmpty = el.value.trim() === '' || isNaN(v);
+    const outOfRange = !isEmpty && (
+      (f.min !== undefined && v < f.min) ||
+      (f.max !== undefined && v > f.max)
+    );
+    if (isEmpty || outOfRange) {
+      el.style.borderColor = isEmpty ? '' : 'var(--accent-red)';
+      allValid = false;
+    } else {
+      el.style.borderColor = 'var(--accent-green)';
+    }
   });
-  btn.disabled = !allFilled;
-  btn.textContent = allFilled ? 'Kaydet' : 'Kaydet (tüm alanları doldurun)';
+  btn.disabled = !allValid;
+  btn.textContent = allValid ? 'Kaydet' : 'Kaydet (alanları kontrol edin)';
 }
 
 async function saveEventSettings(key) {

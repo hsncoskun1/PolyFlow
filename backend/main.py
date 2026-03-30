@@ -117,9 +117,12 @@ app_state = {
 # ─── HELPERS ──────────────────────────────────────────────────────────────────
 from backend.strategy.engine import evaluate_rules as _evaluate_rules
 
+_NO_SETTINGS = {"time":"no_settings","price":"no_settings","btc_move":"no_settings",
+                "slippage":"no_settings","event_limit":"no_settings","max_positions":"no_settings"}
+
 def _make_asset_rules(sym: str, cd: int = 150, mp: dict = None, key: str = None) -> dict:
     """Kural durumlarini hesapla — moduler engine'e yonlendirir.
-    key (orn. BTC_5M): event'e ozel ayarlar varsa onlari kullan, yoksa global fallback."""
+    ONEMLI: key icin event ayari YOKSA tum kurallar 'no_settings' doner → islem acilmaz."""
     if mp is None:
         mp = _asset_market.get(key or sym, {"up_ask": 0.5, "slippage_pct": 1.2})
     from backend.config import load_settings
@@ -128,10 +131,10 @@ def _make_asset_rules(sym: str, cd: int = 150, mp: dict = None, key: str = None)
     if key:
         event_s = get_event_settings(key)
         if event_s:
-            # Event ayarlari global ayarlarin uzerine yazar
             merged = {**global_settings, **event_s}
         else:
-            merged = global_settings
+            # Ayar yok → tum kurallar bloke, bot bu event'te islem acamaz
+            return dict(_NO_SETTINGS)
     else:
         merged = global_settings
     return _evaluate_rules(sym, cd, mp, app_state["positions"], merged)
@@ -173,6 +176,7 @@ async def simulation_tick():
                     "slippage_pct": round(abs(up_price - down_price) * 100, 2) if up_price > 0 else 1.0,
                 })
                 rules = _make_asset_rules(sym, cd, mp, key=key)
+                settings_configured = rules.get("time") != "no_settings"
 
                 # Event verisi (Polymarket'ten)
                 real_event = {
@@ -213,6 +217,7 @@ async def simulation_tick():
                     "event":        real_event,
                     "pinned":       key in pinned_set,
                     "has_position": any(p.get("asset") == sym for p in app_state["positions"]),
+                    "settings_configured": settings_configured,
                     "phase":        _asset_phases.get(sym, "entry"),
                     "slug":         real.get("slug", ""),
                     "ptb":          get_ptb(key),
