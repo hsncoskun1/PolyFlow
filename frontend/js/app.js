@@ -828,6 +828,7 @@ function renderEventCard(key) {
         <div class="eac-price-row">
           <span class="eac-ptb-label">PTB</span>
           <span class="eac-ptb-val">${a.ptb ? '$' + Number(a.ptb).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}) : '...'}</span>
+          ${a.live_price ? `<span class="eac-price-sep">|</span><span class="eac-live-price">$${Number(a.live_price).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}</span>` : ''}
         </div>
       </div>
     </div>

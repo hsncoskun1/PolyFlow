@@ -2449,6 +2449,7 @@ html, body {
 .eac-price-dn  { color: var(--accent-red); font-weight: 600; }
 .eac-ptb-label { color: var(--text-muted); font-weight: 700; font-size: 9px; text-transform: uppercase; }
 .eac-ptb-val   { color: var(--accent-yellow); font-weight: 600; }
+.eac-live-price { color: var(--accent-green); font-weight: 700; }
 .eac-price-sep { color: var(--border-primary); font-size: 8px; }
 
 /* Clickable title link */

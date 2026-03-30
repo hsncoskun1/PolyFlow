@@ -213,6 +213,7 @@ async def simulation_tick():
                     "phase":        _asset_phases.get(sym, "entry"),
                     "slug":         real.get("slug", ""),
                     "ptb":          get_ptb(key),
+                    "live_price":   get_live_price(sym),
                 }
 
             app_state["assets"] = asset_states
@@ -621,9 +622,10 @@ _ptb_locked: dict[str, bool] = {}      # key → kilitlendi mi
 _ptb_task = None
 
 # Coin isimleri → RTDS subscription (canli fiyat icin)
+# Topic: crypto_prices (Binance kaynakli), sembol formati: btcusdt
 RTDS_SYMBOLS = {
-    "BTC": "btc/usd", "ETH": "eth/usd", "SOL": "sol/usd",
-    "XRP": "xrp/usd", "DOGE": "doge/usd", "BNB": "bnb/usd", "HYPE": "hype/usd",
+    "BTC": "btcusdt", "ETH": "ethusdt", "SOL": "solusdt",
+    "XRP": "xrpusdt", "DOGE": "dogeusdt", "BNB": "bnbusdt", "HYPE": "hypeusdt",
 }
 
 # Variant map (TF → Polymarket past-results variant)
@@ -1031,6 +1033,7 @@ async def lifespan(app):
     t4 = asyncio.create_task(clob_ws_connect())
     t5 = asyncio.create_task(relayer_health_loop())
     t6 = asyncio.create_task(_ptb_loop())
+    await start_rtds()  # RTDS WebSocket — canli coin fiyatlari
     yield
     t1.cancel()
     t2.cancel()
@@ -1041,6 +1044,77 @@ async def lifespan(app):
 
 
 RELAYER_HEALTH_URL = "https://clob.polymarket.com"
+
+# ─── RTDS WEBSOCKET: Canli Coin Fiyatlari ────────────────────────────────────
+RTDS_URL = "wss://ws-live-data.polymarket.com"
+_rtds_prices: dict[str, float] = {}    # sym → canli fiyat (USD)
+_rtds_running = False
+
+def get_live_price(sym: str) -> float:
+    """Belirli coin'in canli fiyatini don."""
+    return _rtds_prices.get(sym, 0.0)
+
+async def _rtds_coin_loop(sym: str, rtds_symbol: str):
+    """Tek bir coin icin RTDS WebSocket baglantisi. Her coin ayri baglanti."""
+    global _rtds_prices
+    sub_msg = json.dumps({
+        "action": "subscribe",
+        "subscriptions": [{
+            "topic": "crypto_prices",
+            "type": "*",
+            "filters": json.dumps({"symbol": rtds_symbol})
+        }]
+    })
+    retry = 1
+    while _rtds_running:
+        try:
+            async with websockets.connect(
+                RTDS_URL, ping_interval=20, ping_timeout=20, close_timeout=5
+            ) as ws:
+                await ws.send(sub_msg)
+                addlog("info", f"RTDS {sym} baglandi ({rtds_symbol})")
+                retry = 1
+                while _rtds_running:
+                    try:
+                        raw = await asyncio.wait_for(ws.recv(), timeout=15.0)
+                        if not raw or raw in ("PONG", "pong"):
+                            continue
+                        if isinstance(raw, bytes):
+                            raw = raw.decode("utf-8", errors="ignore")
+                        if not raw.strip():
+                            continue
+                        data = json.loads(raw)
+                        payload = data.get("payload", {})
+                        if isinstance(payload, dict):
+                            # Format 1: payload.value (Chainlink)
+                            val = payload.get("value", 0)
+                            if val and float(val) > 0:
+                                _rtds_prices[sym] = round(float(val), 2)
+                            # Format 2: payload.data array (Binance)
+                            arr = payload.get("data", [])
+                            if arr and isinstance(arr, list):
+                                last = arr[-1]
+                                if isinstance(last, dict) and last.get("value"):
+                                    _rtds_prices[sym] = round(float(last["value"]), 2)
+                    except asyncio.TimeoutError:
+                        continue
+                    except websockets.ConnectionClosed:
+                        break
+                    except Exception:
+                        break
+        except Exception as e:
+            if _rtds_running:
+                await asyncio.sleep(retry)
+                retry = min(retry * 2, 30)
+
+async def start_rtds():
+    """Tum coinler icin RTDS WebSocket baglantilari baslat."""
+    global _rtds_running
+    _rtds_running = True
+    for sym, rtds_sym in RTDS_SYMBOLS.items():
+        asyncio.create_task(_rtds_coin_loop(sym, rtds_sym))
+    addlog("info", f"RTDS basladi: {len(RTDS_SYMBOLS)} coin izleniyor")
+
 
 async def relayer_health_loop():
     """Ping Polymarket CLOB/Relayer API every 60s to update connection status."""
