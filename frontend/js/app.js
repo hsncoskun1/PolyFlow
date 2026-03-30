@@ -655,6 +655,26 @@ function updateCardsInPlace(keys) {
       pnlBadge.textContent = `${pnl >= 0 ? '+' : ''}${formatUSD(pnl)}`;
     }
 
+    // PTB + canli fiyat guncelle
+    const ptbEl = card.querySelector('.eac-ptb-val');
+    if (ptbEl && a.ptb) {
+      ptbEl.textContent = '$' + Number(a.ptb).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+    }
+    const liveEl = card.querySelector('.eac-live-price');
+    if (a.live_price) {
+      if (liveEl) {
+        liveEl.textContent = '$' + Number(a.live_price).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+      } else {
+        // live_price elementi yoksa ekle
+        const priceRow = card.querySelector('.eac-price-row');
+        if (priceRow && !priceRow.querySelector('.eac-live-price')) {
+          priceRow.insertAdjacentHTML('beforeend',
+            `<span class="eac-price-sep">|</span><span class="eac-live-price">$${Number(a.live_price).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}</span>`
+          );
+        }
+      }
+    }
+
     // GO alert: sound + banner when all rules pass for a tracked asset
     if (allPass && state.pinned.includes(key) && state.botRunning) {
       if (!_goAlerted[sym]) {
