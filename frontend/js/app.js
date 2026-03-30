@@ -44,8 +44,9 @@ const state = {
     event_trade_limit:  1,
     max_open_positions: 1,
   },
-  // Per-asset strategy overrides (persisted to localStorage)
-  assetSettings: JSON.parse(localStorage.getItem('polyflow_asset_settings') || '{}'),
+  // Per-event strategy overrides — keyed by full event key (BTC_5M, ETH_15M vs.)
+  // Backend SQLite'tan yüklenir, localStorage kullanılmaz
+  assetSettings: {},
   // Manual sort order
   manualOrder: [],
   // Collapsible group state
@@ -61,10 +62,20 @@ let _chipsBuilt    = false;
 let _lastRenderKey = ''; // flickering prevention
 let _dragSym       = null; // drag-and-drop source
 
-// Helper: get effective strategy for a given asset (per-asset overrides global)
-function getAssetStrategy(sym) {
-  const base = sym.includes('_') ? sym.split('_')[0] : sym;
-  return Object.assign({}, state.strategy, state.assetSettings[base] || {});
+// Helper: event'e özgü ayarları döndür — key = "BTC_5M" gibi tam event key'i
+// event_settings[key] varsa global'in üstüne yazar, yoksa sadece global kullanılır
+function getAssetStrategy(key) {
+  return Object.assign({}, state.strategy, state.assetSettings[key] || {});
+}
+
+// Tüm event ayarlarını backend'den yükle
+async function loadAllEventSettings() {
+  try {
+    const res = await fetch('/api/settings-all');
+    if (!res.ok) return;
+    const data = await res.json();
+    state.assetSettings = data || {};
+  } catch(e) { /* sessizce devam */ }
 }
 
 /** Extract base symbol from sym_tf key (e.g. "BTC_5M" → "BTC") */
@@ -760,8 +771,8 @@ function renderEventCard(key) {
   const rules    = a.rules || {};
   const ruleKeys = ['time','price','btc_move','slippage','event_limit','max_positions'];
 
-  const st = getAssetStrategy(sym);
-  const hasCustomSettings = !!(state.assetSettings[sym]);
+  const st = getAssetStrategy(key);
+  const hasCustomSettings = !!(state.assetSettings[key]);
   const spreadDisabled = (st.max_slippage_pct || 0.03) >= 0.5;
 
   const passCount = ruleKeys.filter(k => {
@@ -917,97 +928,189 @@ function renderEventCard(key) {
 </div>`;
 }
 
-// ─── Per-Asset Settings Modal ──────────────
+// ─── Per-Event Settings Modal ──────────────────────────────────────────────────
+// Her event (BTC_5M, ETH_15M vs.) kendi ayarlarını SQLite'ta saklar.
+// Yeni eventlerde alanlar boş gösterilir (sadece silik placeholder).
+// Tüm alanlar doldurulmadan kayıt yapılamaz.
+
+const EVENT_SETTING_FIELDS = [
+  { key:'min_entry_price',                    label:'Min Giriş Fiyatı',             unit:'0–1',   placeholder:'örn: 0.76',  hint:'UP token minimum olasılığı (örn. 0.76 = %76)' },
+  { key:'max_entry_price',                    label:'Max Giriş Fiyatı',             unit:'0–1',   placeholder:'örn: 0.97',  hint:'UP token maksimum olasılığı (örn. 0.97 = %97)' },
+  { key:'time_rule_threshold',                label:'Max Entry Süresi',             unit:'sn',    placeholder:'örn: 90',    hint:'Event bitişine max kaç saniye kaldığında giriş yap (örn. 90)' },
+  { key:'min_entry_seconds',                  label:'Min Entry Süresi',             unit:'sn',    placeholder:'örn: 20',    hint:'Event bitişine en az kaç saniye kalmalı (örn. 20)' },
+  { key:'min_move_delta',                     label:'Min Fiyat Hareketi',           unit:'delta', placeholder:'örn: 0.02',  hint:'UP fiyatının 0.50\'den minimum sapması (örn. 0.02 = %2 hareket)' },
+  { key:'max_slippage_pct',                   label:'Max Spread',                   unit:'%',     placeholder:'örn: 3',     hint:'Bid-ask spread yüzdesi (örn. 3 = %3). 50+ devre dışı bırakır.' },
+  { key:'event_trade_limit',                  label:'Event Başına Max İşlem',       unit:'adet',  placeholder:'örn: 1',     hint:'Bu event penceresinde açılabilecek max pozisyon (örn. 1)' },
+  { key:'max_open_positions',                 label:'Toplam Max Açık Pozisyon',     unit:'adet',  placeholder:'örn: 1',     hint:'Tüm eventlerde aynı anda max kaç pozisyon açık olabilir' },
+  { key:'order_amount',                       label:'İşlem Miktarı',                unit:'$',     placeholder:'örn: 2',     hint:'Her işlemde kullanılacak USDC miktarı' },
+  { key:'target_exit_price',                  label:'Hedef Çıkış Fiyatı',          unit:'0–1',   placeholder:'örn: 0.90',  hint:'Bu fiyata ulaşınca otomatik kapat (örn. 0.90 = %90)' },
+  { key:'stop_loss_price',                    label:'Stop Loss Fiyatı',             unit:'0–1',   placeholder:'örn: 0.80',  hint:'Bu fiyatın altına düşünce zararı kes (örn. 0.80 = %80)' },
+  { key:'force_sell_before_resolution_seconds',label:'Force Sell Süresi',           unit:'sn',    placeholder:'örn: 15',    hint:'Event bitmeden kaç saniye önce pozisyon zorla kapatılsın' },
+];
+
+// % olarak girilen alanlar → backend'e decimal gönderilir (÷100)
+const _pctFields = new Set(['max_slippage_pct']);
+
 function openAssetSettings(key) {
-  // key = "BTC_5M" gibi event key — her event icin ayri ayar
   const a = state.assets[key];
-  if (!a) {
-    // Eski format uyumlulugu: base sym ile gelmisse ilk event'i bul
-    const assetKey = Object.keys(state.assets).find(k => k.startsWith(key + '_')) || key;
-    return openAssetSettings(assetKey);
-  }
-  const st = getAssetStrategy(key);
-  const over = state.assetSettings[key] || {};
+  if (!a) return;
 
-  // Helper: display value (% fields shown as whole number e.g. 0.03 → 3)
-  const dispVal = (key, val) => key === 'max_slippage_pct' ? (val * 100).toFixed(1) : val;
+  const saved = state.assetSettings[key] || null; // null = henüz ayar yok
+  const tf   = a.timeframe || key.split('_').slice(1).join('_') || '5M';
+  const tfLabel = {'5M':'5 Dakika','15M':'15 Dakika','1H':'1 Saat','4H':'4 Saat','1D':'1 Gün'}[tf] || tf;
 
-  const fld = (key, label, val, hint) => {
-    const dv = dispVal(key, val);
-    const isOverridden = over[key] !== undefined;
+  // Alan oluşturucu — kayıtlı değer varsa göster, yoksa sadece placeholder
+  const fld = (f) => {
+    let raw = saved ? saved[f.key] : undefined;
+    const hasVal = raw !== undefined && raw !== null && raw !== '';
+    // Yüzde alanları kullanıcıya büyük sayı olarak gösterilir (0.03 → 3)
+    const dispVal = (hasVal && _pctFields.has(f.key)) ? (Number(raw) * 100).toFixed(1) : (hasVal ? raw : '');
     return `<div class="as-field">
-      <label class="as-label">${label}</label>
-      <input class="as-input ${isOverridden ? 'overridden' : ''}"
-             id="as-${sym}-${key}" type="number" step="any"
-             value="${dv}"
-             placeholder="Örn: ${hint}" />
-      <span class="as-hint">${hint}</span>
+      <label class="as-label">${f.label} <span class="as-unit">${f.unit}</span></label>
+      <input class="as-input${hasVal ? ' has-value' : ''}"
+             id="esf-${key}-${f.key}"
+             type="number" step="any"
+             value="${dispVal}"
+             placeholder="${f.placeholder}"
+             oninput="onEventSettingInput('${key}')" />
+      <span class="as-hint">${f.hint}</span>
     </div>`;
   };
 
+  const isNew = !saved;
   const body = `
-<div class="as-modal" id="as-modal-${sym}">
+<div class="as-modal" id="as-modal-${key}">
   <div class="as-header">
     <div class="as-icon" style="background:${a.color}22;color:${a.color};">${a.icon}</div>
     <div>
-      <div class="as-title">${a.name} — Event Ayarları</div>
-      <div class="as-sub">Bu asset için global ayarları geçersiz kılar. Boş bırakılan alanlar global değeri kullanır.</div>
+      <div class="as-title">${a.name} · ${tfLabel} — Strateji Ayarları</div>
+      <div class="as-sub${isNew ? ' as-sub-new' : ''}">
+        ${isNew
+          ? '⚠️ Bu event için henüz ayar kaydedilmemiş. Bot şu an global ayarları kullanıyor. Tüm alanları doldurarak kaydedin.'
+          : '✏️ Bu event\'e özel ayarlar aktif. Değiştirip kaydedebilir veya Temizle ile silebilirsiniz.'}
+      </div>
     </div>
   </div>
   <div class="as-grid">
-    ${fld('min_entry_price',    'Min Giriş Fiyatı (0–1)',    st.min_entry_price,    '0.75 — UP token min olasılığı')}
-    ${fld('max_entry_price',    'Max Giriş Fiyatı (0–1)',    st.max_entry_price,    '0.98 — UP token max olasılığı')}
-    ${fld('time_rule_threshold','Max Süre (sn)',              st.time_rule_threshold,'90 — event bitişine max kalan süre')}
-    ${fld('min_entry_seconds',  'Min Süre (sn)',              st.min_entry_seconds,  '10 — event bitişine min kalan süre')}
-    ${fld('min_btc_move_up',    'Min Fiyat Hareketi',         st.min_btc_move_up,    '70 — BTC için $70, SOL için $1.5')}
-    ${fld('max_slippage_pct',   'Max Spread (%)',             st.max_slippage_pct,   '3 — %3 spread, 0.5+ devre dışı bırakır')}
-    ${fld('event_trade_limit',  'Event Başına Max İşlem',     st.event_trade_limit,  '1 — her 5M eventinde max işlem sayısı')}
-    ${fld('order_amount',       'İşlem Miktarı ($)',          st.order_amount,       '2 — her işlemde kullanılacak tutar')}
+    ${EVENT_SETTING_FIELDS.map(f => fld(f)).join('')}
   </div>
   <div class="as-actions">
-    <button class="as-btn-reset" onclick="resetAssetSettings('${sym}')">Sıfırla (Global'e Dön)</button>
-    <button class="as-btn-save"  onclick="saveAssetSettings('${sym}')">Kaydet</button>
+    ${!isNew ? `<button class="as-btn-reset" onclick="clearEventSettings('${key}')">🗑 Temizle</button>` : '<div></div>'}
+    <div class="as-save-area">
+      <span class="as-save-msg" id="esf-msg-${key}"></span>
+      <button class="as-btn-save" id="esf-save-${key}"
+              onclick="saveEventSettings('${key}')"
+              ${isNew ? 'disabled' : ''}>
+        ${isNew ? 'Kaydet (tüm alanları doldurun)' : 'Kaydet'}
+      </button>
+    </div>
   </div>
 </div>`;
 
-  const modal = document.getElementById('page-modal');
-  const overlay = document.getElementById('page-modal-overlay');
-  const title = document.getElementById('page-modal-title');
-  const modalBody = document.getElementById('page-modal-body');
+  const modal    = document.getElementById('page-modal');
+  const overlay  = document.getElementById('page-modal-overlay');
+  const title    = document.getElementById('page-modal-title');
+  const modalBody= document.getElementById('page-modal-body');
   if (!modal) return;
-  title.textContent = `${a.name} · Event Ayarları`;
+  title.textContent = `${a.name} ${tfLabel} · Strateji Ayarları`;
   modalBody.innerHTML = body;
   modal.style.display = 'flex';
   overlay.style.display = 'block';
+  onEventSettingInput(key); // kaydet butonunu başlangıçta değerlendir
 }
 
-function saveAssetSettings(sym) {
-  // Fields that user enters as % whole number → stored as decimal (÷100)
-  const pctFields = new Set(['max_slippage_pct']);
-  const keys = ['min_entry_price','max_entry_price','time_rule_threshold','min_entry_seconds',
-                 'min_btc_move_up','max_slippage_pct','event_trade_limit','order_amount'];
-  const saved = {};
-  keys.forEach(k => {
-    const el = document.getElementById(`as-${sym}-${k}`);
-    if (!el || el.value === '') return;
-    let v = parseFloat(el.value);
-    if (isNaN(v)) return;
-    if (pctFields.has(k)) v = v / 100; // convert % back to decimal
-    saved[k] = v;
+// Kullanıcı alan doldurunca kaydet butonunu aktifleştir/pasifleştir
+function onEventSettingInput(key) {
+  const btn = document.getElementById(`esf-save-${key}`);
+  if (!btn) return;
+  const allFilled = EVENT_SETTING_FIELDS.every(f => {
+    const el = document.getElementById(`esf-${key}-${f.key}`);
+    return el && el.value.trim() !== '' && !isNaN(parseFloat(el.value));
   });
-  state.assetSettings[sym] = saved;
-  localStorage.setItem('polyflow_asset_settings', JSON.stringify(state.assetSettings));
-  closePageModal();
-  _lastRenderKey = '';
-  renderEventsList();
+  btn.disabled = !allFilled;
+  btn.textContent = allFilled ? 'Kaydet' : 'Kaydet (tüm alanları doldurun)';
 }
 
-function resetAssetSettings(sym) {
-  delete state.assetSettings[sym];
-  localStorage.setItem('polyflow_asset_settings', JSON.stringify(state.assetSettings));
-  closePageModal();
-  _lastRenderKey = '';
-  renderEventsList();
+async function saveEventSettings(key) {
+  const msg = document.getElementById(`esf-msg-${key}`);
+  const btn = document.getElementById(`esf-save-${key}`);
+
+  // Değerleri topla
+  const payload = {};
+  let valid = true;
+  EVENT_SETTING_FIELDS.forEach(f => {
+    const el = document.getElementById(`esf-${key}-${f.key}`);
+    if (!el || el.value.trim() === '') { valid = false; return; }
+    let v = parseFloat(el.value);
+    if (isNaN(v)) { valid = false; return; }
+    if (_pctFields.has(f.key)) v = v / 100; // % → decimal
+    payload[f.key] = v;
+  });
+
+  if (!valid) {
+    if (msg) { msg.textContent = '⚠️ Tüm alanlar doldurulmalı.'; msg.className = 'as-save-msg err'; }
+    return;
+  }
+
+  if (btn) { btn.disabled = true; btn.textContent = 'Kaydediliyor...'; }
+  if (msg) { msg.textContent = ''; msg.className = 'as-save-msg'; }
+
+  try {
+    const res  = await fetch(`/api/settings/${encodeURIComponent(key)}`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+
+    if (!res.ok || !data.ok) {
+      throw new Error(data.error || 'Sunucu hatası');
+    }
+
+    // Doğrulama: dönen veriyi kontrol et
+    const returned = data.settings || {};
+    const mismatches = EVENT_SETTING_FIELDS.filter(f => {
+      const sent = _pctFields.has(f.key) ? payload[f.key] : payload[f.key];
+      return Math.abs((returned[f.key] || 0) - (sent || 0)) > 0.0001;
+    });
+
+    if (mismatches.length > 0) {
+      throw new Error(`Kayıt doğrulanamadı (${mismatches.map(f=>f.label).join(', ')})`);
+    }
+
+    // Başarılı — state güncelle, modalı kapat
+    state.assetSettings[key] = returned;
+    if (msg) { msg.textContent = '✓ Kaydedildi'; msg.className = 'as-save-msg ok'; }
+    setTimeout(() => {
+      closePageModal();
+      _lastRenderKey = '';
+      renderEventsList();
+    }, 800);
+
+  } catch(e) {
+    if (msg) { msg.textContent = `❌ ${e.message}`; msg.className = 'as-save-msg err'; }
+    if (btn) { btn.disabled = false; btn.textContent = 'Tekrar Dene'; }
+  }
+}
+
+async function clearEventSettings(key) {
+  const a = state.assets[key] || {};
+  const label = a.name ? `${a.name} (${key})` : key;
+  const confirmed = confirm(`"${label}" event ayarları silinecek.\nBot bu event için global ayarları kullanmaya başlayacak.\n\nDevam edilsin mi?`);
+  if (!confirmed) return;
+
+  try {
+    const res  = await fetch(`/api/settings/${encodeURIComponent(key)}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || 'Silinemedi');
+
+    delete state.assetSettings[key];
+    closePageModal();
+    _lastRenderKey = '';
+    renderEventsList();
+  } catch(e) {
+    alert(`Temizlenemedi: ${e.message}`);
+  }
 }
 
 // ─── Expanded Body ────────────────────────
@@ -1870,6 +1973,7 @@ function formatAssetPrice(sym, price) {
 // ═══════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', () => {
   connectWS();
+  loadAllEventSettings(); // tüm event ayarlarını backend'den yükle
   startUptimeCounter();
   addLog('info', 'POLYFLOW v1.3.0 — Modal pages + Timeframe filter + All Markets view');
   // Set initial timeframe

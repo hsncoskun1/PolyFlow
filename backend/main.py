@@ -117,13 +117,24 @@ app_state = {
 # ─── HELPERS ──────────────────────────────────────────────────────────────────
 from backend.strategy.engine import evaluate_rules as _evaluate_rules
 
-def _make_asset_rules(sym: str, cd: int = 150, mp: dict = None) -> dict:
-    """Kural durumlarini hesapla — moduler engine'e yonlendirir."""
+def _make_asset_rules(sym: str, cd: int = 150, mp: dict = None, key: str = None) -> dict:
+    """Kural durumlarini hesapla — moduler engine'e yonlendirir.
+    key (orn. BTC_5M): event'e ozel ayarlar varsa onlari kullan, yoksa global fallback."""
     if mp is None:
-        mp = _asset_market.get(sym, {"up_ask": 0.5, "slippage_pct": 1.2})
+        mp = _asset_market.get(key or sym, {"up_ask": 0.5, "slippage_pct": 1.2})
     from backend.config import load_settings
-    settings = load_settings()
-    return _evaluate_rules(sym, cd, mp, app_state["positions"], settings)
+    from backend.storage.db import get_event_settings
+    global_settings = load_settings()
+    if key:
+        event_s = get_event_settings(key)
+        if event_s:
+            # Event ayarlari global ayarlarin uzerine yazar
+            merged = {**global_settings, **event_s}
+        else:
+            merged = global_settings
+    else:
+        merged = global_settings
+    return _evaluate_rules(sym, cd, mp, app_state["positions"], merged)
 
 
 # ─── LOG BUFFER ───────────────────────────────────────────────────────────────
@@ -161,7 +172,7 @@ async def simulation_tick():
                     "down_bid": round(down_price - 0.005, 3), "down_ask": down_price,
                     "slippage_pct": round(abs(up_price - down_price) * 100, 2) if up_price > 0 else 1.0,
                 })
-                rules = _make_asset_rules(sym, cd, mp)
+                rules = _make_asset_rules(sym, cd, mp, key=key)
 
                 # Event verisi (Polymarket'ten)
                 real_event = {
@@ -1249,6 +1260,58 @@ async def update_settings(body: dict):
     save_settings(s)
     app_state["mode"] = s.get("mode", app_state["mode"])
     return {"ok": True, "settings": s}
+
+# ─── Per-Event Settings ───────────────────────────────────────────────────────
+# Her event kendi ayarlarini saklar (BTC_5M, ETH_15M vs.)
+# Kayit yoksa bot global settings.json'a fallback yapar.
+
+EVENT_SETTINGS_FIELDS = [
+    "min_entry_price", "max_entry_price",
+    "time_rule_threshold", "min_entry_seconds",
+    "min_move_delta", "max_slippage_pct",
+    "event_trade_limit", "max_open_positions",
+    "target_exit_price", "stop_loss_price",
+    "stop_loss_enabled", "force_sell_enabled",
+    "force_sell_before_resolution_seconds",
+    "sell_retry_count", "order_amount",
+    "target_exit_pct", "stop_loss_pct", "exit_mode",
+    "order_amount_pct", "amount_mode",
+]
+
+@app.get("/api/settings/{key}")
+async def get_event_settings_ep(key: str):
+    from backend.storage.db import get_event_settings
+    data = get_event_settings(key)
+    if data is None:
+        return {"ok": False, "key": key, "settings": None, "configured": False}
+    return {"ok": True, "key": key, "settings": data, "configured": True}
+
+@app.post("/api/settings/{key}")
+async def save_event_settings_ep(key: str, body: dict):
+    from backend.storage.db import save_event_settings
+    # Sadece bilinen alanları kabul et
+    filtered = {k: v for k, v in body.items() if k in EVENT_SETTINGS_FIELDS}
+    if not filtered:
+        return {"ok": False, "error": "Geçerli alan bulunamadı"}
+    saved = save_event_settings(key, filtered)
+    if saved is None:
+        return {"ok": False, "error": "Veritabanına yazılamadı"}
+    addlog("success", f"Event ayarları kaydedildi: {key}")
+    return {"ok": True, "key": key, "settings": saved}
+
+@app.delete("/api/settings/{key}")
+async def delete_event_settings_ep(key: str):
+    from backend.storage.db import delete_event_settings
+    deleted = delete_event_settings(key)
+    if not deleted:
+        return {"ok": False, "error": "Silinemedi veya kayıt bulunamadı"}
+    addlog("info", f"Event ayarları silindi: {key}")
+    return {"ok": True, "key": key}
+
+@app.get("/api/settings-all")
+async def get_all_event_settings_ep():
+    from backend.storage.db import get_all_event_settings
+    return get_all_event_settings()
 
 @app.post("/api/bot/start")
 async def start_bot():

@@ -76,6 +76,12 @@ def init_db():
         settings_json TEXT,
         created_at TEXT DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS event_settings (
+        key TEXT PRIMARY KEY,
+        settings_json TEXT NOT NULL,
+        updated_at TEXT DEFAULT (datetime('now'))
+    );
     """)
     conn.commit()
     conn.close()
@@ -177,6 +183,71 @@ def log_event(event_key: str, slug: str, ptb: float):
     """, (event_key, slug, ptb, datetime.now().isoformat()))
     conn.commit()
     conn.close()
+
+
+# ─── Event Settings CRUD ─────────────────────────────────────────────────────
+
+def get_event_settings(key: str) -> dict | None:
+    """Event'e özel ayarları döndür. Kayıt yoksa None."""
+    conn = get_conn()
+    row = conn.execute("SELECT settings_json FROM event_settings WHERE key=?", (key,)).fetchone()
+    conn.close()
+    if row:
+        try:
+            return json.loads(row["settings_json"])
+        except Exception:
+            return None
+    return None
+
+
+def save_event_settings(key: str, settings: dict) -> dict | None:
+    """Event ayarlarını kaydet. Başarılıysa DB'den doğrulayıp geri döndür, değilse None."""
+    try:
+        payload = json.dumps(settings)
+        conn = get_conn()
+        conn.execute("""
+            INSERT INTO event_settings (key, settings_json, updated_at)
+            VALUES (?, ?, datetime('now'))
+            ON CONFLICT(key) DO UPDATE SET settings_json=excluded.settings_json,
+                                           updated_at=datetime('now')
+        """, (key, payload))
+        conn.commit()
+        # Doğrulama: kaydedileni geri oku
+        row = conn.execute("SELECT settings_json FROM event_settings WHERE key=?", (key,)).fetchone()
+        conn.close()
+        if row:
+            return json.loads(row["settings_json"])
+        return None
+    except Exception:
+        return None
+
+
+def delete_event_settings(key: str) -> bool:
+    """Event ayarlarını sil. Başarılıysa True."""
+    try:
+        conn = get_conn()
+        conn.execute("DELETE FROM event_settings WHERE key=?", (key,))
+        conn.commit()
+        # Doğrulama: gerçekten silindi mi?
+        row = conn.execute("SELECT key FROM event_settings WHERE key=?", (key,)).fetchone()
+        conn.close()
+        return row is None
+    except Exception:
+        return False
+
+
+def get_all_event_settings() -> dict:
+    """Tüm event ayarlarını {key: settings_dict} formatında döndür."""
+    conn = get_conn()
+    rows = conn.execute("SELECT key, settings_json FROM event_settings").fetchall()
+    conn.close()
+    result = {}
+    for row in rows:
+        try:
+            result[row["key"]] = json.loads(row["settings_json"])
+        except Exception:
+            pass
+    return result
 
 
 # ─── Init ────────────────────────────────────────────────────────────────────

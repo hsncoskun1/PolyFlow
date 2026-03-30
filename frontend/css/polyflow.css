@@ -2919,7 +2919,24 @@ html, body {
 }
 .as-input:focus { outline: none; border-color: var(--accent-purple); }
 .as-input.overridden { border-color: var(--accent-yellow); }
-.as-actions { display: flex; gap: 10px; justify-content: flex-end; }
+.as-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  align-items: center;
+  border-top: 1px solid var(--border-primary);
+  padding-top: 12px;
+  margin-top: 4px;
+}
+.as-save-area { display: flex; align-items: center; gap: 10px; }
+.as-save-msg {
+  font-size: 12px;
+  font-weight: 600;
+  min-width: 140px;
+  text-align: right;
+}
+.as-save-msg.ok  { color: var(--accent-green); }
+.as-save-msg.err { color: var(--accent-red); }
 .as-btn-save {
   padding: 8px 20px;
   background: var(--accent-purple);
@@ -2929,9 +2946,14 @@ html, body {
   font-size: 13px;
   font-weight: 700;
   cursor: pointer;
-  transition: filter 0.15s;
+  transition: filter 0.15s, opacity 0.15s;
+  white-space: nowrap;
 }
-.as-btn-save:hover { filter: brightness(1.1); }
+.as-btn-save:hover:not(:disabled) { filter: brightness(1.1); }
+.as-btn-save:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
 .as-btn-reset {
   padding: 8px 16px;
   background: var(--bg-card);
@@ -2943,6 +2965,15 @@ html, body {
   transition: all 0.15s;
 }
 .as-btn-reset:hover { border-color: var(--accent-red); color: var(--accent-red); }
+.as-unit {
+  color: var(--accent-purple);
+  font-size: 10px;
+  margin-left: 4px;
+  font-style: normal;
+}
+.as-input.has-value { border-color: var(--accent-green); }
+.as-input::placeholder { color: var(--text-muted); opacity: 0.5; font-style: italic; }
+.as-sub-new { color: var(--accent-yellow) !important; }
 
 /* ── Drag-and-drop styles ── */
 .eac[draggable="true"] { cursor: grab; }
