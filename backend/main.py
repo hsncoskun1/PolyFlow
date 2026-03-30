@@ -272,7 +272,7 @@ async def broadcast_loop():
             await broadcast_state()
         except Exception as e:
             logger.error(f"broadcast_loop: {e}")
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.1)  # 100ms — hizli guncelleme
 
 
 # ─── GAMMA MARKET SCAN ────────────────────────────────────────────────────────
@@ -954,12 +954,16 @@ async def clob_ws_connect():
         try:
             # Gather token IDs from cached gamma markets
             subscribe_assets = []
-            for sym, info in _market_cache.items():
+            token_to_key = {}  # token_id → (market_key, "up"/"down")
+            for key, info in _market_cache.items():
                 tokens = info.get("tokens", [])
                 if tokens:
-                    subscribe_assets.append({
-                        "asset_id": tokens[0] if len(tokens) > 0 else "",
-                    })
+                    if len(tokens) > 0:
+                        subscribe_assets.append({"asset_id": tokens[0]})
+                        token_to_key[tokens[0]] = (key, "up")
+                    if len(tokens) > 1:
+                        subscribe_assets.append({"asset_id": tokens[1]})
+                        token_to_key[tokens[1]] = (key, "down")
 
             if not subscribe_assets:
                 addlog("info", "CLOB WS: Henuz token yok, Gamma scan bekleniyor...")
@@ -990,10 +994,19 @@ async def clob_ws_connect():
                             asset_id = data.get("asset_id", "")
                             price = data.get("price") or data.get("last_trade_price")
                             if asset_id and price:
-                                _clob_prices[asset_id] = {
-                                    "price": float(price),
-                                    "timestamp": time.time(),
-                                }
+                                fp = float(price)
+                                _clob_prices[asset_id] = {"price": fp, "timestamp": time.time()}
+                                # CLOB fiyatini dogrudan _asset_market'a yaz
+                                mapping = token_to_key.get(asset_id)
+                                if mapping:
+                                    mkey, side = mapping
+                                    if mkey in _asset_market:
+                                        if side == "up":
+                                            _asset_market[mkey]["up_ask"] = fp
+                                            _asset_market[mkey]["up_bid"] = round(fp - 0.005, 3)
+                                        else:
+                                            _asset_market[mkey]["down_ask"] = fp
+                                            _asset_market[mkey]["down_bid"] = round(fp - 0.005, 3)
                     except Exception:
                         pass
 
