@@ -241,56 +241,56 @@
       <div class="card">
         <div class="card-title mb-3">📥 Giriş Kuralları</div>
         <div class="form-group">
-          <label class="form-label">Zaman Eşiği (sn) <span class="info-btn" title="Event bitimine kaç saniye kala işlem aranmaya başlar. Örn: 90 = son 90 saniyede giriş aranır.">i</span></label>
+          <label class="form-label">Zaman Eşiği (sn) <span class="info-btn" title="Event bitimine kaç saniye kala işlem aranmaya başlar. Örn: 90 = son 90 saniyede giriş aranır."></span></label>
           <input type="number" class="form-input" id="cfg-time-threshold" value="90">
         </div>
         <div class="form-group">
-          <label class="form-label">Min Giriş Süresi (sn) <span class="info-btn" title="Event bitimine bu kadar saniye kala artık işleme girilmez. Güvenlik tamponu.">i</span></label>
+          <label class="form-label">Min Giriş Süresi (sn) <span class="info-btn" title="Event bitimine bu kadar saniye kala artık işleme girilmez. Güvenlik tamponu."></span></label>
           <input type="number" class="form-input" id="cfg-min-entry-sec" value="10">
         </div>
         <div class="form-group">
-          <label class="form-label">Min Giriş Fiyatı <span class="info-btn" title="UP token minimum fiyatı. 0.75 = en az %75 olasılıkla UP beklenmeli.">i</span></label>
+          <label class="form-label">Min Giriş Fiyatı <span class="info-btn" title="UP token minimum fiyatı. 0.75 = en az %75 olasılıkla UP beklenmeli."></span></label>
           <input type="number" class="form-input" id="cfg-min-entry" value="0.75" step="0.01">
         </div>
         <div class="form-group">
-          <label class="form-label">Max Giriş Fiyatı <span class="info-btn" title="UP token maksimum fiyatı. 0.98 = %98 üzeri çok pahalı, girmeye değmez.">i</span></label>
+          <label class="form-label">Max Giriş Fiyatı <span class="info-btn" title="UP token maksimum fiyatı. 0.98 = %98 üzeri çok pahalı, girmeye değmez."></span></label>
           <input type="number" class="form-input" id="cfg-max-entry" value="0.98" step="0.01">
         </div>
         <div class="form-group">
-          <label class="form-label">Min Fiyat Hareketi ($) <span class="info-btn" title="Coin fiyatında minimum değişim. Yeterli hareket olmadan pozisyon açılmaz.">i</span></label>
+          <label class="form-label">Min Fiyat Hareketi ($) <span class="info-btn" title="Coin fiyatında minimum değişim. Yeterli hareket olmadan pozisyon açılmaz."></span></label>
           <input type="number" class="form-input" id="cfg-btc-move" value="70" step="1">
         </div>
         <div class="form-group">
-          <label class="form-label">Max Slippage % <span class="info-btn" title="Alış-satış farkı (spread) bu oranı geçerse işlem açılmaz. 3 = %3 max spread.">i</span></label>
+          <label class="form-label">Max Slippage % <span class="info-btn" title="Alış-satış farkı (spread) bu oranı geçerse işlem açılmaz. 3 = %3 max spread."></span></label>
           <input type="number" class="form-input" id="cfg-slippage" value="3" step="0.5">
         </div>
       </div>
       <div class="card">
         <div class="card-title mb-3">📤 Çıkış Kuralları</div>
         <div class="form-group">
-          <label class="form-label">Hedef Çıkış Fiyatı <span class="info-btn" title="Bu fiyata ulaşınca pozisyon kar ile kapatılır (Take Profit). 0.90 = %90.">i</span></label>
+          <label class="form-label">Hedef Çıkış Fiyatı <span class="info-btn" title="Bu fiyata ulaşınca pozisyon kar ile kapatılır (Take Profit). 0.90 = %90."></span></label>
           <input type="number" class="form-input" id="cfg-target" value="0.90" step="0.01">
         </div>
         <div class="form-group">
-          <label class="form-label">Zarar Durdur Fiyatı <span class="info-btn" title="Bu fiyatın altına düşerse pozisyon zararla kapatılır (Stop Loss). 0.50 = %50.">i</span></label>
+          <label class="form-label">Zarar Durdur Fiyatı <span class="info-btn" title="Bu fiyatın altına düşerse pozisyon zararla kapatılır (Stop Loss). 0.50 = %50."></span></label>
           <input type="number" class="form-input" id="cfg-stoploss" value="0.50" step="0.01">
         </div>
         <div class="form-group">
-          <label class="form-label">Zorunlu Satış Süresi (sn) <span class="info-btn" title="Event bitmeden bu kadar saniye önce pozisyon zorla kapatılır. 15 = son 15 saniyede sat.">i</span></label>
+          <label class="form-label">Zorunlu Satış Süresi (sn) <span class="info-btn" title="Event bitmeden bu kadar saniye önce pozisyon zorla kapatılır. 15 = son 15 saniyede sat."></span></label>
           <input type="number" class="form-input" id="cfg-force-sell-sec" value="15">
         </div>
         <div class="form-group">
-          <label class="form-label">Satış Deneme Sayısı <span class="info-btn" title="Satış başarısız olursa kaç kez yeniden denenecek.">i</span></label>
+          <label class="form-label">Satış Deneme Sayısı <span class="info-btn" title="Satış başarısız olursa kaç kez yeniden denenecek."></span></label>
           <input type="number" class="form-input" id="cfg-sell-retry" value="200">
         </div>
         <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px;">
           <label class="flex items-center gap-2">
             <label class="toggle"><input type="checkbox" id="cfg-force-sell" checked><span class="toggle-slider"></span></label>
-            <span class="text-sm">Zorunlu Satış Aktif <span class="info-btn" title="Event bitmeden önce pozisyonu otomatik kapat.">i</span></span>
+            <span class="text-sm">Zorunlu Satış Aktif <span class="info-btn" title="Event bitmeden önce pozisyonu otomatik kapat."></span></span>
           </label>
           <label class="flex items-center gap-2">
             <label class="toggle"><input type="checkbox" id="cfg-stop-loss-enabled" checked><span class="toggle-slider"></span></label>
-            <span class="text-sm">Zarar Durdur Aktif <span class="info-btn" title="Stop loss fiyatına düşünce otomatik sat.">i</span></span>
+            <span class="text-sm">Zarar Durdur Aktif <span class="info-btn" title="Stop loss fiyatına düşünce otomatik sat."></span></span>
           </label>
         </div>
         <button class="btn btn-primary w-full mt-4" onclick="saveStrategy()">Stratejiyi Kaydet</button>
@@ -305,18 +305,18 @@
       <div class="card">
         <div class="card-title mb-3">💰 İşlem Miktarı</div>
         <div class="form-group">
-          <label class="form-label">İşlem Miktarı ($) <span class="info-btn" title="Her trade'de kullanılacak USDC miktarı.">i</span></label>
+          <label class="form-label">İşlem Miktarı ($) <span class="info-btn" title="Her trade'de kullanılacak USDC miktarı."></span></label>
           <input type="number" class="form-input" id="cfg-amount" value="2" step="0.5">
         </div>
         <div class="form-group">
-          <label class="form-label">Alış Emir Tipi <span class="info-btn" title="MARKET: anlık fiyattan al. LIMIT: belirlediğin fiyattan al (daha ucuz ama dolmayabilir).">i</span></label>
+          <label class="form-label">Alış Emir Tipi <span class="info-btn" title="MARKET: anlık fiyattan al. LIMIT: belirlediğin fiyattan al (daha ucuz ama dolmayabilir)."></span></label>
           <select class="form-input" id="cfg-buy-type">
             <option value="MARKET">MARKET (Anlık)</option>
             <option value="LIMIT">LIMIT (Fiyat Belirle)</option>
           </select>
         </div>
         <div class="form-group">
-          <label class="form-label">Satış Emir Tipi <span class="info-btn" title="MARKET: anlık fiyattan sat. LIMIT: belirlediğin fiyattan sat.">i</span></label>
+          <label class="form-label">Satış Emir Tipi <span class="info-btn" title="MARKET: anlık fiyattan sat. LIMIT: belirlediğin fiyattan sat."></span></label>
           <select class="form-input" id="cfg-sell-type">
             <option value="MARKET">MARKET (Anlık)</option>
             <option value="LIMIT">LIMIT (Fiyat Belirle)</option>
@@ -326,25 +326,25 @@
       <div class="card">
         <div class="card-title mb-3">🔒 Limitler</div>
         <div class="form-group">
-          <label class="form-label">Event Başına Limit <span class="info-btn" title="Aynı event'te (örn. BTC 5DK 13:00) en fazla kaç trade açılabilir.">i</span></label>
+          <label class="form-label">Event Başına Limit <span class="info-btn" title="Aynı event'te (örn. BTC 5DK 13:00) en fazla kaç trade açılabilir."></span></label>
           <input type="number" class="form-input" id="cfg-event-limit" value="1">
         </div>
         <div class="form-group">
-          <label class="form-label">Max Açık Pozisyon <span class="info-btn" title="Aynı anda en fazla kaç pozisyon açık olabilir. Tüm eventler dahil.">i</span></label>
+          <label class="form-label">Max Açık Pozisyon <span class="info-btn" title="Aynı anda en fazla kaç pozisyon açık olabilir. Tüm eventler dahil."></span></label>
           <input type="number" class="form-input" id="cfg-max-pos" value="1">
         </div>
         <div class="form-group">
-          <label class="form-label">Günlük Max Trade <span class="info-btn" title="Bir günde en fazla kaç trade açılabilir. 0 = sınırsız.">i</span></label>
+          <label class="form-label">Günlük Max Trade <span class="info-btn" title="Bir günde en fazla kaç trade açılabilir. 0 = sınırsız."></span></label>
           <input type="number" class="form-input" id="cfg-max-daily" value="0">
         </div>
         <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px;">
           <label class="flex items-center gap-2">
             <label class="toggle"><input type="checkbox" id="cfg-auto-claim" checked><span class="toggle-slider"></span></label>
-            <span class="text-sm">Otomatik Tahsilat <span class="info-btn" title="Kazanan pozisyonları otomatik olarak tahsil et (claim).">i</span></span>
+            <span class="text-sm">Otomatik Tahsilat <span class="info-btn" title="Kazanan pozisyonları otomatik olarak tahsil et (claim)."></span></span>
           </label>
           <label class="flex items-center gap-2">
             <label class="toggle"><input type="checkbox" id="cfg-one-per-event" checked><span class="toggle-slider"></span></label>
-            <span class="text-sm">Event Başına Tek İşlem <span class="info-btn" title="Her event'te yalnızca bir kez işlem aç. Kapatıldıktan sonra tekrar açılmaz.">i</span></span>
+            <span class="text-sm">Event Başına Tek İşlem <span class="info-btn" title="Her event'te yalnızca bir kez işlem aç. Kapatıldıktan sonra tekrar açılmaz."></span></span>
           </label>
         </div>
         <button class="btn btn-primary w-full mt-4" onclick="saveTrade()">Trade Ayarlarını Kaydet</button>
@@ -359,14 +359,14 @@
       <div class="card">
         <div class="card-title mb-3">🔧 Genel</div>
         <div class="form-group">
-          <label class="form-label">Trade Modu <span class="info-btn" title="PAPER: simülasyon (gerçek para harcanmaz). LIVE: gerçek para ile trade.">i</span></label>
+          <label class="form-label">Trade Modu <span class="info-btn" title="PAPER: simülasyon (gerçek para harcanmaz). LIVE: gerçek para ile trade."></span></label>
           <select class="form-input" id="cfg-mode">
             <option value="PAPER">PAPER (Simülasyon)</option>
             <option value="LIVE">LIVE (Gerçek Para)</option>
           </select>
         </div>
         <div class="form-group">
-          <label class="form-label">Sunucu Portu <span class="info-btn" title="Dashboard'un çalıştığı port numarası.">i</span></label>
+          <label class="form-label">Sunucu Portu <span class="info-btn" title="Dashboard'un çalıştığı port numarası."></span></label>
           <input type="number" class="form-input" id="cfg-port" value="8002">
         </div>
         <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px;">

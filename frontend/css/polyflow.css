@@ -676,29 +676,36 @@ html, body {
   box-shadow: 0 0 0 2px var(--accent-purple-dim);
 }
 
-/* Tooltip info butonu — kucuk "i" ikonu */
+/* Tooltip info butonu — ufak i logosu */
 .info-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 13px;
-  height: 13px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
-  background: rgba(100,116,139,0.2);
+  background: rgba(100,116,139,0.18);
   color: #64748b;
+  font-size: 0;
+  cursor: help;
+  margin-left: 3px;
+  vertical-align: super;
+  position: relative;
+  transition: all 0.2s;
+  border: 1px solid rgba(100,116,139,0.25);
+}
+.info-btn::before {
+  content: 'i';
   font-size: 8px;
   font-weight: 700;
   font-style: italic;
-  cursor: help;
-  margin-left: 3px;
-  vertical-align: middle;
-  position: relative;
-  transition: all 0.2s;
-  font-family: serif;
+  font-family: 'Georgia', serif;
+  line-height: 1;
 }
 .info-btn:hover {
-  background: rgba(59,130,246,0.35);
+  background: rgba(59,130,246,0.3);
   color: #60a5fa;
+  border-color: rgba(59,130,246,0.4);
 }
 .info-btn::after {
   content: attr(title);
