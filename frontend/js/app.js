@@ -711,7 +711,12 @@ function renderEventsList() {
 
   const allKeys = Object.keys(state.assets); // e.g. ["BTC_5M","BTC_1D","ETH_5M",...]
   if (!allKeys.length) {
-    container.innerHTML = '<div class="text-center text-muted" style="padding:60px 20px;"><div style="font-size:32px;margin-bottom:10px;">📡</div>Yükleniyor...</div>';
+    const connMsg = state.connected ? 'Market verileri taranıyor...' : 'Sunucuya bağlanıyor...';
+    container.innerHTML = `<div class="text-center text-muted" style="padding:60px 20px;">
+      <div style="font-size:32px;margin-bottom:10px;">📡</div>
+      <div style="font-size:14px;font-weight:600;margin-bottom:6px;">${connMsg}</div>
+      <div style="font-size:11px;opacity:0.6;">Polymarket Gamma API taranıyor — lütfen bekleyin</div>
+    </div>`;
     return;
   }
 

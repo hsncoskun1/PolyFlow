@@ -541,6 +541,8 @@ async def scan_slug_based():
                                 await asyncio.sleep(1.0)
                         if found_markets:
                             active = [m for m in found_markets if m["end_ts"] > now_ts]
+                            if not active:
+                                logger.warning(f"scan_slug {key}: {len(found_markets)} market bulundu ama hicbiri aktif degil")
                             pick = min(active, key=lambda m: m["end_ts"]) if active else max(found_markets, key=lambda m: m["end_ts"])
                             new_cache[key] = pick
                             if key not in _asset_market:
@@ -557,6 +559,8 @@ async def scan_slug_based():
                             old = _market_cache.get(key)
                             if old and old.get("end_ts", 0) > now_ts:
                                 new_cache[key] = old
+                            else:
+                                logger.warning(f"scan_slug {key}: slug bulunamadi — {[s for s,_ in candidates[:2]]}")
                     except Exception as tf_err:
                         logger.warning(f"scan_slug {key}: {tf_err}")
                         old = _market_cache.get(key)
@@ -1259,6 +1263,21 @@ async def lifespan(app):
 
     addlog("info", "POLYFLOW v1.7 basladi — Multi-Asset + CLOB WS + Gamma Scan")
     addlog("info", f"Izlenen: {len(ASSETS)} asset: {', '.join(ASSETS.keys())}")
+
+    # ─── STARTUP: İlk scan henüz tasklist başlamadan tamamlanır ──
+    # Background task olarak bırakılırsa kullanıcı 10-30sn boyunca boş dashboard görür.
+    # Burada bekleyerek sunucu açılır açılmaz eventler hazır olur.
+    addlog("info", "Ilk market taramasi basliyor (baglanti hazir olmadan once)...")
+    try:
+        await scan_slug_based()
+        addlog("success", f"Ilk tarama tamamlandi: {len(_market_cache)} market bulundu")
+        if not _market_cache:
+            addlog("warn", "Ilk tarama bos geldi — discovery scan deneniyor...")
+            await discovery_scan()
+            await scan_slug_based()
+            addlog("info", f"Discovery sonrasi: {len(_market_cache)} market")
+    except Exception as e:
+        addlog("warn", f"Startup scan hatasi: {e} — arka planda devam edilecek")
 
     tasks = []
     try:
