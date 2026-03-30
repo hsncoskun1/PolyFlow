@@ -169,15 +169,41 @@ async def simulation_tick():
                 if not info:
                     continue
 
-                up_price   = real.get("up_price", 0.5)
-                down_price = real.get("down_price", 0.5)
                 tf    = real.get("timeframe", "5M")
                 cd    = max(0, int(real["end_ts"]) - now_ts)
-                mp    = _asset_market.get(key, {
-                    "up_bid": round(up_price - 0.005, 3), "up_ask": up_price,
-                    "down_bid": round(down_price - 0.005, 3), "down_ask": down_price,
-                    "slippage_pct": round(abs(up_price - down_price) * 100, 2) if up_price > 0 else 1.0,
-                })
+                mp    = _asset_market.get(key, {})
+
+                # Fiyat kaynagi onceligine gore:
+                # 1) CLOB midpoint (REST poll — en dogru, her 3sn guncelleniyor)
+                # 2) CLOB WS best_ask (anlık ama stale kalabilir)
+                # 3) Gamma outcomePrices (en stale — son care)
+                clob_up_mid  = mp.get("up_mid",   0)
+                clob_dn_mid  = mp.get("down_mid", 0)
+                clob_up_ask  = mp.get("up_ask",   0)
+                clob_dn_ask  = mp.get("down_ask", 0)
+                gamma_up     = real.get("up_price", 0.5)
+                gamma_dn     = real.get("down_price", 0.5)
+                # Mantikli aralik: 0.01 – 0.99
+                def _valid(v): return v is not None and 0.01 <= v <= 0.99
+                up_price   = clob_up_mid if _valid(clob_up_mid) else (clob_up_ask if _valid(clob_up_ask) else gamma_up)
+                down_price = clob_dn_mid if _valid(clob_dn_mid) else (clob_dn_ask if _valid(clob_dn_ask) else gamma_dn)
+
+                if not mp:
+                    mp = {
+                        "up_bid": round(up_price - 0.005, 3), "up_ask": up_price,
+                        "down_bid": round(down_price - 0.005, 3), "down_ask": down_price,
+                        "slippage_pct": round(abs(up_price - down_price) * 100, 2) if up_price > 0 else 1.2,
+                    }
+
+                # BTC delta: live kripto fiyati - PTB (USD cinsinden)
+                # MoveRule icin referans botla ayni hesap
+                ptb_val = get_ptb(key)
+                live_val = _rtds_prices.get(sym, 0)
+                if ptb_val > 0 and live_val > 0:
+                    mp["btc_delta"] = round(live_val - ptb_val, 2)
+                else:
+                    mp.pop("btc_delta", None)
+
                 rules = _make_asset_rules(sym, cd, mp, key=key)
                 settings_configured = rules.get("time") != "no_settings"
 
@@ -517,11 +543,14 @@ async def scan_slug_based():
                             pick = min(active, key=lambda m: m["end_ts"]) if active else max(found_markets, key=lambda m: m["end_ts"])
                             new_cache[key] = pick
                             if key not in _asset_market:
-                                _asset_market[key] = {"up_bid": 0.50, "up_ask": 0.51, "down_bid": 0.48, "down_ask": 0.49, "slippage_pct": 1.2}
-                            _asset_market[key]["up_ask"]   = pick["up_price"]
-                            _asset_market[key]["down_ask"] = pick["down_price"]
-                            _asset_market[key]["up_bid"]   = round(pick["up_price"]  - 0.005, 3)
-                            _asset_market[key]["down_bid"] = round(pick["down_price"] - 0.005, 3)
+                                _asset_market[key] = {
+                                    "up_bid": round(pick["up_price"] - 0.005, 3),
+                                    "up_ask": pick["up_price"],
+                                    "down_bid": round(pick["down_price"] - 0.005, 3),
+                                    "down_ask": pick["down_price"],
+                                    "slippage_pct": 1.2,
+                                    "up_mid": 0.0, "down_mid": 0.0,
+                                }
                             total += 1
                         else:
                             old = _market_cache.get(key)
@@ -895,14 +924,28 @@ async def scan_gamma_markets():
         for sym, tf_map in per_sym_tf.items():
             for tf, pick in tf_map.items():
                 key = f"{sym}_{tf}"
+                old_cached = _market_cache.get(key, {})
+                old_slug   = old_cached.get("slug", "")
+                new_slug   = pick["slug"]
+                slug_changed = old_slug and old_slug != new_slug
+
                 new_cache[key] = pick
-                # Init or update _asset_market for this sym_tf
-                if key not in _asset_market:
-                    _asset_market[key] = {"up_bid": 0.50, "up_ask": 0.51, "down_bid": 0.48, "down_ask": 0.49, "slippage_pct": 1.2}
-                _asset_market[key]["up_ask"]   = pick["up_price"]
-                _asset_market[key]["down_ask"] = pick["down_price"]
-                _asset_market[key]["up_bid"]   = round(pick["up_price"]  - 0.005, 3)
-                _asset_market[key]["down_bid"] = round(pick["down_price"] - 0.005, 3)
+
+                # Slug degistiyse (yeni 5dk event basladiysa) _asset_market temizle
+                # ve CLOB midpoint poll hemen gercek fiyati yazacak
+                if slug_changed or key not in _asset_market:
+                    _asset_market[key] = {
+                        "up_bid": round(pick["up_price"] - 0.005, 3),
+                        "up_ask": pick["up_price"],   # gecici — midpoint poll uzersine yazacak
+                        "down_bid": round(pick["down_price"] - 0.005, 3),
+                        "down_ask": pick["down_price"],
+                        "slippage_pct": 1.2,
+                        "up_mid": 0.0,    # henuz bilinmiyor, midpoint poll dolduracak
+                        "down_mid": 0.0,
+                    }
+                    if slug_changed:
+                        addlog("info", f"Yeni event: {key} {old_slug} -> {new_slug} | market reset")
+                # NOT: mevcut CLOB WS/midpoint degerlerini ezme — onlar daha dogru
                 total_found += 1
 
         _market_cache = new_cache
@@ -1045,61 +1088,74 @@ async def clob_ws_connect():
                         if not raw_msg or raw_msg in ("PONG", "pong"):
                             continue
                         data = json.loads(raw_msg)
-                        msg_type = data.get("event_type", "")
 
                         def _update_token(tid: str, bid=None, ask=None, price=None):
-                            """Tek token icin fiyat guncelle."""
+                            """Tek token icin fiyat guncelle — midpoint = (bid+ask)/2."""
                             if not tid:
                                 return
                             if tid not in _clob_prices:
                                 _clob_prices[tid] = {}
-                            now = time.time()
                             if bid is not None:
                                 _clob_prices[tid]["best_bid"] = float(bid)
                             if ask is not None:
                                 _clob_prices[tid]["best_ask"] = float(ask)
-                            if price is not None:
+                            # Midpoint: bid+ask ortasi en gercek fiyat
+                            b_val = _clob_prices[tid].get("best_bid")
+                            a_val = _clob_prices[tid].get("best_ask")
+                            if b_val is not None and a_val is not None and b_val > 0 and a_val > 0:
+                                _clob_prices[tid]["price"] = round((b_val + a_val) / 2.0, 4)
+                            elif price is not None:
                                 _clob_prices[tid]["price"] = float(price)
-                            elif bid is not None and ask is not None:
-                                _clob_prices[tid]["price"] = round((float(bid) + float(ask)) / 2.0, 4)
-                            _clob_prices[tid]["timestamp"] = now
+                            _clob_prices[tid]["timestamp"] = time.time()
 
                             # _asset_market'a yaz
                             mapping = token_to_key.get(tid)
-                            if mapping:
-                                mkey, side = mapping
-                                if mkey in _asset_market:
-                                    p = _clob_prices[tid].get("price", 0)
-                                    b = _clob_prices[tid].get("best_bid", p - 0.005)
-                                    a = _clob_prices[tid].get("best_ask", p + 0.005)
-                                    if side == "up":
-                                        _asset_market[mkey]["up_ask"] = round(a, 4)
-                                        _asset_market[mkey]["up_bid"] = round(b, 4)
-                                    else:
-                                        _asset_market[mkey]["down_ask"] = round(a, 4)
-                                        _asset_market[mkey]["down_bid"] = round(b, 4)
+                            if not mapping:
+                                return
+                            mkey, side = mapping
+                            if mkey not in _asset_market:
+                                _asset_market[mkey] = {}
+                            p = _clob_prices[tid].get("price", 0)
+                            b = _clob_prices[tid].get("best_bid", 0)
+                            a = _clob_prices[tid].get("best_ask", 0)
+                            if not p:
+                                return
+                            if side == "up":
+                                _asset_market[mkey]["up_ask"] = round(a if a > 0 else p, 4)
+                                _asset_market[mkey]["up_bid"] = round(b if b > 0 else p - 0.005, 4)
+                                _asset_market[mkey]["up_mid"] = round(p, 4)
+                            else:
+                                _asset_market[mkey]["down_ask"] = round(a if a > 0 else p, 4)
+                                _asset_market[mkey]["down_bid"] = round(b if b > 0 else p - 0.005, 4)
+                                _asset_market[mkey]["down_mid"] = round(p, 4)
+                            # Spread = up_ask + down_ask - 1
+                            ua = _asset_market[mkey].get("up_ask", 0.5)
+                            da = _asset_market[mkey].get("down_ask", 0.5)
+                            _asset_market[mkey]["slippage_pct"] = round(max(0, (ua + da - 1) * 100), 2)
 
-                        if msg_type == "price_change":
-                            # price_changes array — eski bot formati
-                            for ch in (data.get("price_changes") or []):
+                        # ── Format 1: {price_changes: [{asset_id, price, best_bid, best_ask}]}
+                        # ── Format 2: [{asset_id, price, best_bid, best_ask}] (array snapshot)
+                        # ── Format 3: {asset_id, price, best_bid, best_ask} (single object)
+                        if isinstance(data, list):
+                            for ch in data:
                                 _update_token(
                                     str(ch.get("asset_id", "")),
-                                    bid=ch.get("best_bid"),
-                                    ask=ch.get("best_ask"),
-                                    price=ch.get("price"),
+                                    bid=ch.get("best_bid"), ask=ch.get("best_ask"),
+                                    price=ch.get("price") or ch.get("last_trade_price"),
                                 )
-                            # Tek asset_id formati (fallback)
-                            aid = data.get("asset_id", "")
-                            if aid:
-                                _update_token(aid, price=data.get("price") or data.get("last_trade_price"))
-
-                        elif msg_type in ("book", "last_trade_price"):
-                            aid = data.get("asset_id", "")
-                            _update_token(aid, price=data.get("price") or data.get("last_trade_price"))
-
-                        elif msg_type == "tick_size_change":
-                            # Tick size degisimi — ileride order execution icin
-                            pass
+                        elif "price_changes" in data:
+                            for ch in (data["price_changes"] or []):
+                                _update_token(
+                                    str(ch.get("asset_id", "")),
+                                    bid=ch.get("best_bid"), ask=ch.get("best_ask"),
+                                    price=ch.get("price") or ch.get("last_trade_price"),
+                                )
+                        elif "asset_id" in data:
+                            _update_token(
+                                str(data["asset_id"]),
+                                bid=data.get("best_bid"), ask=data.get("best_ask"),
+                                price=data.get("price") or data.get("last_trade_price"),
+                            )
 
                     except json.JSONDecodeError:
                         continue
@@ -1114,6 +1170,59 @@ async def clob_ws_connect():
             app_state["connection_status"]["clob_ws"] = False
 
         await asyncio.sleep(5)  # Reconnect delay
+
+
+# ─── CLOB PRICE POLL (Referans botla ayni: buy price = Polymarket butonu degeri) ─
+async def clob_midpoint_poll():
+    """Her 3 saniyede CLOB REST'ten UP/DOWN buy price cek.
+    /price?side=buy → Polymarket UI'daki buton degeri (market order fill price).
+    Referans bot da bu degeri kullanir."""
+    CLOB_BASE = "https://clob.polymarket.com"
+    while True:
+        try:
+            pinned_set = set(app_state.get("pinned", []))
+            keys_ordered = list(pinned_set) + [k for k in _market_cache if k not in pinned_set]
+            for key in keys_ordered[:20]:
+                info = _market_cache.get(key)
+                if not info:
+                    continue
+                tokens = info.get("tokens", [])
+                if len(tokens) < 2:
+                    continue
+                up_tid, dn_tid = tokens[0], tokens[1]
+                try:
+                    async with httpx.AsyncClient(timeout=3.0) as c:
+                        # /price?side=buy = market order buy price = Polymarket UI butonu
+                        r_up_buy  = await c.get(f"{CLOB_BASE}/price", params={"token_id": up_tid,  "side": "buy"})
+                        r_dn_buy  = await c.get(f"{CLOB_BASE}/price", params={"token_id": dn_tid, "side": "buy"})
+                        r_up_mid  = await c.get(f"{CLOB_BASE}/midpoint", params={"token_id": up_tid})
+                        r_dn_mid  = await c.get(f"{CLOB_BASE}/midpoint", params={"token_id": dn_tid})
+
+                    if r_up_buy.status_code == 200 and r_dn_buy.status_code == 200:
+                        up_buy = float(r_up_buy.json().get("price", 0))
+                        dn_buy = float(r_dn_buy.json().get("price", 0))
+                        up_mid_val = float(r_up_mid.json().get("mid", 0)) if r_up_mid.status_code == 200 else 0
+                        dn_mid_val = float(r_dn_mid.json().get("mid", 0)) if r_dn_mid.status_code == 200 else 0
+
+                        if up_buy > 0 and dn_buy > 0:
+                            if key not in _asset_market:
+                                _asset_market[key] = {}
+                            # up_ask = buy price (Polymarket UI ile eslesen deger)
+                            _asset_market[key]["up_ask"]   = round(up_buy, 4)
+                            _asset_market[key]["down_ask"] = round(dn_buy, 4)
+                            # midpoint = (buy+sell)/2 yaklasimi — bid olarak kullan
+                            _asset_market[key]["up_mid"]   = round(up_mid_val, 4) if up_mid_val else round(up_buy - 0.02, 4)
+                            _asset_market[key]["down_mid"] = round(dn_mid_val, 4) if dn_mid_val else round(dn_buy - 0.02, 4)
+                            _asset_market[key]["up_bid"]   = round(up_mid_val - 0.005, 4) if up_mid_val else round(up_buy - 0.025, 4)
+                            _asset_market[key]["down_bid"] = round(dn_mid_val - 0.005, 4) if dn_mid_val else round(dn_buy - 0.025, 4)
+                            # Spread = up_ask + down_ask - 1
+                            _asset_market[key]["slippage_pct"] = round(max(0, (up_buy + dn_buy - 1) * 100), 2)
+                except Exception:
+                    pass
+                await asyncio.sleep(0.15)
+        except Exception as e:
+            logger.debug(f"midpoint poll hata: {e}")
+        await asyncio.sleep(3)
 
 
 # ─── LIFESPAN ─────────────────────────────────────────────────────────────────
@@ -1134,6 +1243,7 @@ async def lifespan(app):
         tasks.append(asyncio.create_task(simulation_tick()))
         tasks.append(asyncio.create_task(gamma_scan_loop()))
         tasks.append(asyncio.create_task(clob_ws_connect()))
+        tasks.append(asyncio.create_task(clob_midpoint_poll()))
         tasks.append(asyncio.create_task(relayer_health_loop()))
         tasks.append(asyncio.create_task(_ptb_loop()))
         await start_rtds()  # RTDS WebSocket — canli coin fiyatlari

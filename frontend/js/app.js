@@ -81,7 +81,7 @@ const RTDS_SYM_MAP = { btcusdt:'BTC', ethusdt:'ETH', solusdt:'SOL', xrpusdt:'XRP
 let _directRafPending = false;
 const _dirtyKeys      = new Set();
 const _cardLastShown  = {};  // key → timestamp — throttle için
-const DISPLAY_THROTTLE_MS = 150; // min kart güncelleme aralığı
+const DISPLAY_THROTTLE_MS = 100; // min kart güncelleme aralığı
 
 function _scheduleDirectUpdate(key) {
   const now = Date.now();
@@ -838,8 +838,10 @@ function updateCardsInPlace(keys) {
     const timeMax        = st.time_rule_threshold || 90;
     const timeMinStr     = timeMin < 60 ? `${timeMin}sn` : `${Math.floor(timeMin/60)}:${String(timeMin%60).padStart(2,'0')}dk`;
     const timeMaxStr     = timeMax < 60 ? `${timeMax}sn` : `${Math.floor(timeMax/60)}:${String(timeMax%60).padStart(2,'0')}dk`;
-    const movePct        = refPrice > 0 ? (priceDiff / refPrice * 100) : 0;
-    const moveStr        = (movePct >= 0 ? '+' : '') + movePct.toFixed(2) + '%';
+    const btcDelta       = (a.live_price && a.ptb) ? (a.live_price - a.ptb) : null;
+    const moveStr        = btcDelta != null
+      ? (btcDelta >= 0 ? '+' : '') + '$' + Math.abs(btcDelta).toFixed(2)
+      : '...';
     const spreadVal      = (mp.slippage_pct || 0).toFixed(2) + '%';
     const posCount       = state.positions.length;
     const assetPosCnt    = state.positions.filter(p => p.asset === sym).length;
@@ -1036,11 +1038,13 @@ function renderEventCard(key) {
   const timeMaxStr = timeMax < 60 ? `${timeMax}sn` : `${Math.floor(timeMax/60)}:${String(timeMax%60).padStart(2,'0')}dk`;
   const priceRangeStr = `${((st.min_entry_price||0.75)*100).toFixed(0)}–${((st.max_entry_price||0.98)*100).toFixed(0)}%`;
 
-  const movePct    = refPrice > 0 ? (priceDiff / refPrice * 100) : 0;
-  const moveStr    = (movePct >= 0 ? '+' : '') + movePct.toFixed(2) + '%';
-  const minMoveStr = st.min_move_delta != null
-    ? `Min %${(st.min_move_delta * 100).toFixed(2)}`
-    : `Min $${(st.min_btc_move_up || 70).toFixed(0)}`;
+  // BTC USD delta = anlık fiyat - PTB (Polymarket sayfasındaki gibi)
+  const btcDelta   = (a.live_price && a.ptb) ? (a.live_price - a.ptb) : null;
+  const minMoveUsd = st.min_move_delta != null ? Number(st.min_move_delta) : 70;
+  const moveStr    = btcDelta != null
+    ? (btcDelta >= 0 ? '+' : '') + '$' + Math.abs(btcDelta).toFixed(2)
+    : '...';
+  const minMoveStr = `Min $${minMoveUsd.toFixed(0)}`;
 
   const spreadVal = (mp.slippage_pct || 0).toFixed(2) + '%';
   const spreadMax = ((st.max_slippage_pct || 0.03) * 100).toFixed(0) + '%';
