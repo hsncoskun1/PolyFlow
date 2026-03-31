@@ -335,9 +335,8 @@ def to_app_state_positions() -> list:
     """
     result = []
     for pos in get_all_positions():
-        if pos.trade_status not in (TradeStatus.CLOSED, TradeStatus.STOP_LOSS):
-            # Sadece açık/aktif pozisyonları göster
-            pass
+        if pos.trade_status == TradeStatus.CLOSED:
+            continue  # Kapalı pozisyonları frontend listesinden gizle
         result.append({
             "id":             pos.trade_id,
             "asset":          pos.event_key.split("_")[0],
