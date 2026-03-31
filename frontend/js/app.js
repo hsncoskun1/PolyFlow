@@ -525,12 +525,27 @@ function wsSend(obj) {
 // STATE UPDATE
 // ═══════════════════════════════════════════
 // Hızlı state merge — sadece veri, DOM yok (rAF'tan önce çağrılır)
+const _lastKnownSlugs = {}; // key → son bilinen slug (yeni event tespiti için)
+
 function _mergeState(data) {
   if (data.bot_running  !== undefined) state.botRunning   = data.bot_running;
   if (data.mode)                       state.mode         = data.mode;
   if (data.balance      !== undefined) state.balance      = data.balance;
   if (data.session_pnl  !== undefined) state.sessionPnl   = data.session_pnl;
   if (data.assets    && typeof data.assets === 'object') {
+    // Yeni event tespiti: slug değiştiyse WS fiyat cache'ini temizle
+    // (eski event'in fiyatları yeni event için yanlış — seesawing kaynağı)
+    Object.entries(data.assets).forEach(([k, a]) => {
+      const newSlug = a.slug || (a.event && a.event.slug) || '';
+      const oldSlug = _lastKnownSlugs[k];
+      if (oldSlug && newSlug && oldSlug !== newSlug) {
+        // Yeni event başladı — eski WS fiyatlarını temizle
+        delete _wsMarketPrices[k];
+        console.log(`[PolyFlow] Yeni event ${k}: ${oldSlug} → ${newSlug} | WS fiyat cache temizlendi`);
+      }
+      if (newSlug) _lastKnownSlugs[k] = newSlug;
+    });
+
     state.assets = data.assets;
     // Backend state_update her 500ms'de state.assets'i tamamen eziyor → WS değerleri kaybolur
     // Çözüm 1: CLOB WS market fiyatlarını geri uygula (up_ask/down_ask)

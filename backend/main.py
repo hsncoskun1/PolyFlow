@@ -368,6 +368,7 @@ def _build_search_terms():
 
 ASSET_SEARCH_TERMS = _build_search_terms()
 _market_cache: dict[str, dict] = {}  # sym_tf → {conditionId, tokens, question, slug, up_price, down_price, end_ts, timeframe}
+_market_cache_update_ts: float = 0.0  # CLOB WS reconnect tetikleyici — cache her güncellenince artar
 
 def _detect_tf(slug: str, question: str) -> str:
     """Detect timeframe from Polymarket slug/question."""
@@ -515,7 +516,7 @@ async def discover_slug_market(client: httpx.AsyncClient, slug: str) -> dict | N
 async def scan_slug_based():
     """Slot-based discovery: try prev/current/next slugs and pick the CURRENTLY ACTIVE one.
     Rate-limited: max ~2 req/sec to avoid Gamma API 403/429."""
-    global _market_cache
+    global _market_cache, _market_cache_update_ts
     new_cache: dict[str, dict] = {}
     total = 0
     now_ts = time.time()
@@ -545,7 +546,11 @@ async def scan_slug_based():
                                 logger.warning(f"scan_slug {key}: {len(found_markets)} market bulundu ama hicbiri aktif degil")
                             pick = min(active, key=lambda m: m["end_ts"]) if active else max(found_markets, key=lambda m: m["end_ts"])
                             new_cache[key] = pick
-                            if key not in _asset_market:
+                            # Slug degistiyse VEYA key ilk kezse → _asset_market sifirla (taze baslangic)
+                            old_slug = _market_cache.get(key, {}).get("slug", "")
+                            new_slug = pick.get("slug", "")
+                            slug_changed = (not old_slug) or (old_slug != new_slug)
+                            if slug_changed:
                                 _asset_market[key] = {
                                     "up_bid": round(pick["up_price"] - 0.005, 3),
                                     "up_ask": pick["up_price"],
@@ -554,6 +559,9 @@ async def scan_slug_based():
                                     "slippage_pct": 1.2,
                                     "up_mid": 0.5, "down_mid": 0.5,
                                 }
+                                if old_slug and old_slug != new_slug:
+                                    addlog("info", f"Yeni event (slug-scan): {key} {old_slug} → {new_slug} | market+WS reset")
+                                    _market_cache_update_ts = time.time()  # CLOB WS reconnect sinyali
                             total += 1
                         else:
                             old = _market_cache.get(key)
@@ -877,7 +885,7 @@ async def broadcast_rate_limit(retry_after: int = 60):
 
 async def scan_gamma_markets():
     """Fetch active 'up or down' crypto markets from Gamma API — all timeframes, all assets."""
-    global _market_cache
+    global _market_cache, _market_cache_update_ts
     url = f"{GAMMA_BASE}/markets?active=true&closed=false&limit=500&order=createdAt&ascending=false"
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -968,6 +976,7 @@ async def scan_gamma_markets():
                     }
                     if slug_changed:
                         addlog("info", f"Yeni event: {key} {old_slug} -> {new_slug} | market reset")
+                        _market_cache_update_ts = time.time()  # CLOB WS reconnect sinyali
                 # NOT: mevcut CLOB WS/midpoint degerlerini ezme — onlar daha dogru
                 total_found += 1
 
@@ -1093,6 +1102,8 @@ async def clob_ws_connect():
                 continue
 
             addlog("info", f"CLOB WS baglaniyor... ({len(subscribe_assets)} token)")
+            # Bağlantı anındaki cache versiyonunu kaydet — slug değişince reconnect tetiklenecek
+            ts_at_connect = _market_cache_update_ts
 
             async with websockets.connect(CLOB_WS_URL, ping_interval=30) as ws:
                 app_state["connection_status"]["clob_ws"] = True
@@ -1107,6 +1118,10 @@ async def clob_ws_connect():
                 await ws.send(sub_msg)
 
                 async for raw_msg in ws:
+                    # Yeni event geldi mi? Token ID'ler degistiyse reconnect yap
+                    if _market_cache_update_ts > ts_at_connect:
+                        addlog("info", "CLOB WS: Yeni event token'lari tespit edildi — yeniden baglaniliyor")
+                        break  # inner for loop'u kir → yukarida yeni token_to_key ile reconnect olur
                     try:
                         if not raw_msg or raw_msg in ("PONG", "pong"):
                             continue
