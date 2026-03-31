@@ -1409,11 +1409,43 @@ const EVENT_SETTING_FIELDS = [
   { key:'max_open_positions', label:'Toplam Max Açık',   unit:'↺',  min:1,   max:20,    step:'1',   placeholder:'örn: 1',   hint:'Tüm eventlerde eş zamanlı açık kalabilecek maksimum pozisyon sayısı.' },
 ];
 
-// Bölüm grupları — modal'da ve confirm popup'ta kullanılır
+// Bölüm grupları — confirm popup tablosu için (düz liste)
 const AS_SECTIONS = [
   { label: 'Giriş Koşulları', keys: ['min_entry_price','max_entry_price','time_rule_threshold','min_entry_seconds','min_move_delta','max_slippage_pct'] },
   { label: 'Çıkış Stratejisi', keys: ['target_exit_pct','stop_loss_pct','force_sell_before_resolution_seconds','sell_retry_count'] },
   { label: 'Limitler',         keys: ['order_amount','event_trade_limit','max_open_positions'] },
+];
+
+// Görsel layout — modal'da çiftli satırlar ve gelişmiş blok
+const AS_LAYOUT = [
+  {
+    label: 'Giriş Koşulları',
+    rows: [
+      { pair: ['min_entry_price',    'max_entry_price']         }, // Min | Max giriş
+      { pair: ['time_rule_threshold','min_entry_seconds']       }, // Zaman kuralı | Min kalan
+      { pair: ['min_move_delta',     'max_slippage_pct']        }, // Fiyat hareketi | Max spread
+    ],
+  },
+  {
+    label: 'Çıkış Stratejisi',
+    rows: [
+      { pair: ['target_exit_pct', 'stop_loss_pct'] },             // Hedef | Stop Loss
+    ],
+  },
+  {
+    label: 'Limitler',
+    rows: [
+      { single: 'order_amount' },
+      { pair: ['event_trade_limit', 'max_open_positions'] },      // Event limit | Max açık
+    ],
+  },
+  {
+    label: '⚙ Gelişmiş',
+    adv: true,
+    rows: [
+      { pair: ['force_sell_before_resolution_seconds', 'sell_retry_count'] },
+    ],
+  },
 ];
 
 // Kullanıcı 0-100 (%) girer → backend'e 0-1 olarak gönderilir (÷100)
@@ -1471,14 +1503,37 @@ function openAssetSettings(key) {
     </div>`;
   };
 
-  // Seksiyonları oluştur
-  const sectionsHTML = AS_SECTIONS.map(sec => `
-    <div class="as-section">
+  // Çiftli satır oluşturucu
+  const fldPair = (k1, k2) => {
+    const f1 = EVENT_SETTING_FIELDS.find(f => f.key === k1);
+    const f2 = EVENT_SETTING_FIELDS.find(f => f.key === k2);
+    return `<div class="as-row-pair">${fld(f1)}${fld(f2)}</div>`;
+  };
+  const renderRow = (row) => {
+    if (row.pair)   return fldPair(row.pair[0], row.pair[1]);
+    if (row.single) return fld(EVENT_SETTING_FIELDS.find(f => f.key === row.single));
+    return '';
+  };
+
+  // Seksiyonları oluştur (AS_LAYOUT'tan — çiftli satır destekli)
+  const sectionsHTML = AS_LAYOUT.map(sec => `
+    <div class="as-section${sec.adv ? ' as-section-adv' : ''}">
       <div class="as-section-hdr">${sec.label}</div>
       <div class="as-rows">
-        ${sec.keys.map(k => fld(EVENT_SETTING_FIELDS.find(f => f.key === k))).join('')}
+        ${sec.rows.map(renderRow).join('')}
       </div>
     </div>`).join('');
+
+  // PnL önizleme bloğu
+  const pnlPreviewHTML = `
+  <div class="as-pnl-preview" id="esf-pnl-${key}">
+    <div class="as-pnl-preview-hdr">Tahmini PnL Önizleme</div>
+    <div class="as-pnl-row"><span>Referans Giriş (Min Giriş)</span><span class="as-pnl-val" id="esf-pnl-entry-${key}">—</span></div>
+    <div class="as-pnl-row"><span>Tahmini Hisse</span><span class="as-pnl-val" id="esf-pnl-shares-${key}">—</span></div>
+    <div class="as-pnl-row profit"><span>TP'de Tahmini Kâr</span><span class="as-pnl-val" id="esf-pnl-tp-${key}">—</span></div>
+    <div class="as-pnl-row loss"><span>SL'de Tahmini Zarar</span><span class="as-pnl-val" id="esf-pnl-sl-${key}">—</span></div>
+    <div class="as-pnl-row note"><span>* Gerçek fill/slippage farklı olabilir</span></div>
+  </div>`;
 
   const isNew = !saved;
   const body = `
@@ -1493,6 +1548,7 @@ function openAssetSettings(key) {
   </div>
   ${isNew ? '<div class="as-alert-new">⚠️ Bu event için henüz ayar yok. Tüm alanları doldurun.</div>' : ''}
   ${sectionsHTML}
+  ${pnlPreviewHTML}
   <div class="as-actions">
     ${!isNew ? `<button class="as-btn-reset" onclick="clearEventSettings('${key}')">🗑 Temizle</button>` : '<div></div>'}
     <div class="as-save-area" style="display:flex;flex-direction:column;gap:8px;align-items:flex-end;">
@@ -1556,6 +1612,26 @@ function onEventSettingInput(key) {
   } else {
     btn.textContent = '💸 Kaydet ve İşlem Aç (alanları kontrol edin)';
     if (btnOnly) btnOnly.textContent = 'Kaydet ama İşlem Açma (alanları kontrol edin)';
+  }
+
+  // PnL önizleme güncelle
+  const _v = id => parseFloat(document.getElementById(`esf-${key}-${id}`)?.value) || 0;
+  const amt      = _v('order_amount');
+  const tpPct    = _v('target_exit_pct');
+  const slPct    = _v('stop_loss_pct');
+  const minEntry = _v('min_entry_price');
+  const refEntry = minEntry > 0 ? minEntry / 100 : 0;
+  if (amt > 0 && tpPct > 0 && slPct > 0 && refEntry > 0) {
+    const shares  = amt / refEntry;
+    const tpExit  = Math.min(1.0, refEntry * (1 + tpPct / 100));
+    const slExit  = Math.max(0.01, refEntry * (1 - slPct / 100));
+    const tpPnl   = shares * tpExit - amt;
+    const slPnl   = shares * slExit - amt;
+    const $ = id => document.getElementById(id);
+    const e = $(`esf-pnl-entry-${key}`);   if (e)  e.textContent  = `${(refEntry*100).toFixed(0)}%`;
+    const sh = $(`esf-pnl-shares-${key}`); if (sh) sh.textContent = shares.toFixed(4);
+    const tp = $(`esf-pnl-tp-${key}`);     if (tp) tp.textContent = `+$${tpPnl.toFixed(4)}`;
+    const sl = $(`esf-pnl-sl-${key}`);     if (sl) sl.textContent = `-$${Math.abs(slPnl).toFixed(4)}`;
   }
 }
 

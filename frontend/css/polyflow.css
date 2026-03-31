@@ -2993,6 +2993,16 @@ body.modal-open { overflow: hidden; }
   border-bottom: 1px solid rgba(255,255,255,.04);
 }
 .as-row:last-child { border-bottom: none; }
+
+/* çiftli satır (2-sütun grid) */
+.as-row-pair {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  border-bottom: 1px solid rgba(255,255,255,.04);
+  padding: 2px 0;
+}
+.as-row-pair > .as-row { border-bottom: none; padding: 4px 3px; }
+.as-row-pair:last-child { border-bottom: none; }
 .as-row-meta { flex: 1; min-width: 0; }
 .as-row-name { font-size: 11px; color: var(--text-secondary); font-weight: 600; display: block; }
 .as-row-range { font-size: 9px; color: var(--text-muted); font-family: var(--font-mono); }
@@ -3061,6 +3071,36 @@ body.modal-open { overflow: hidden; }
 .as-btn-reset:hover { border-color: var(--accent-red); color: var(--accent-red); }
 .as-unit { color: var(--accent-purple); font-size: 10px; margin-left: 4px; font-style: normal; }
 .as-sub-new { color: var(--accent-yellow) !important; }
+
+/* gelişmiş / risk bölümü */
+.as-section-adv {
+  background: rgba(255,193,7,.04);
+  border: 1px solid rgba(255,193,7,.15);
+  border-radius: 6px; padding: 8px 10px; margin-top: 2px;
+}
+.as-section-adv .as-section-hdr {
+  color: var(--accent-yellow); border-bottom-color: rgba(255,193,7,.25);
+}
+
+/* PnL önizleme */
+.as-pnl-preview {
+  background: rgba(0,212,170,.05);
+  border: 1px solid rgba(0,212,170,.2);
+  border-radius: 6px; padding: 10px 12px;
+}
+.as-pnl-preview-hdr {
+  font-size: 9px; font-weight: 700; letter-spacing: .8px; text-transform: uppercase;
+  color: var(--accent-green); padding-bottom: 6px;
+  border-bottom: 1px solid rgba(0,212,170,.2); margin-bottom: 6px;
+}
+.as-pnl-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 2px 0; font-size: 11px; color: var(--text-secondary);
+}
+.as-pnl-row .as-pnl-val { font-family: var(--font-mono); font-weight: 600; }
+.as-pnl-row.profit .as-pnl-val { color: var(--accent-green); }
+.as-pnl-row.loss   .as-pnl-val { color: var(--accent-red); }
+.as-pnl-row.note   { font-size: 10px; color: var(--text-muted); font-style: italic; margin-top: 4px; }
 
 /* ── Custom Confirm Popup ── */
 .cf-overlay {

@@ -2,6 +2,29 @@
 
 ---
 
+## v1.8.0 — 2026-03-31
+
+### Event Settings Modal — UI/UX Optimizasyonu
+- **Çiftli satır layout:** İlişkili alanlar aynı satırda (2-sütun grid)
+  - Min/Max Giriş → aynı satır
+  - Zaman Kuralı / Min Kalan Süre → aynı satır
+  - Fiyat Hareketi / Max Spread → aynı satır
+  - Hedef Çıkış / Stop Loss → aynı satır
+  - Event Limit / Toplam Max Açık → aynı satır
+- **Gelişmiş blok:** Force Sell ve Satış Deneme sarı çerçeveli "⚙ Gelişmiş" bölümüne izole edildi
+- **Tahmini PnL Önizlemesi:** Ayarlar girilirken anlık kâr/zarar tahmini (yeşil kutu)
+  - Referans giriş, tahmini hisse, TP kâr, SL zarar dinamik güncelleniyor
+  - "Gerçek fill/slippage farklı olabilir" uyarısı eklendi
+- **CSS:** `.as-row-pair`, `.as-section-adv`, `.as-pnl-preview`, `.as-pnl-row` sınıfları eklendi
+- **Backward compat:** AS_SECTIONS (confirm popup) dokunulmadı, field ID'leri değişmedi
+
+### Raporlar
+- `docs/UI_AUDIT_PHASE5.md` oluşturuldu — mimari hüküm, backend/frontend analizi, UI audit
+- Smoke Run #2 sonucu belgelendi (FORCE_SELL, PnL=-$0.0667, math ✓)
+- CLOSED pozisyon bellekte kalma bug'ı tespit edildi (event_limit/max_positions false fail)
+
+---
+
 ## v1.0.0 — 2026-03-29 (İlk Sürüm)
 
 ### Yeni Özellikler
