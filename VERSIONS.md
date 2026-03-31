@@ -2,6 +2,25 @@
 
 ---
 
+## v2.0.0 — 2026-03-31
+
+### Faz 7–8: Auto-Claim + Final Kapı Kontrolleri
+
+**Faz 7 — Auto-Claim / Relayer**
+- `backend/execution/relayer.py` oluşturuldu — Polymarket Relayer v2 gasless CTF token redemption
+- `auto_claim_loop`: Her 5sn HOLD_TO_RESOLUTION pozisyonları tarar, event bitince redeem eder (sadece LIVE modda)
+- EIP-712 Safe transaction inşa + imza, `_poll_tx_state` onay bekleme
+- Başarılı claim → pozisyon CLOSED, PnL hesapla, session_pnl güncelle
+- Lifespan'a entegre — `_EXEC_AVAILABLE` aktifse arka planda çalışır
+
+**Faz 8 — Final Kapı Kontrolleri**
+- `bot_running: False` default — restart sonrası bot otomatik başlamıyor
+- `auto_start: True` ise lifespan'da otomatik başlama (ayarlanabilir)
+- `max_total_trades` uygulandı — entry trigger'da `sum(_event_trade_counts.values())` kontrolü
+- Tüm Faz 8 kontrolleri geçti: bot_running / safe_mode / mode / positions / connections ✓
+
+---
+
 ## v1.9.0 — 2026-03-31
 
 ### Faz 5–6: Bug Düzeltmeleri + PERCENT Mod

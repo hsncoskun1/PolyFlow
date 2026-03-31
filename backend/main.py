@@ -105,7 +105,7 @@ _asset_market: dict[str, dict] = {}     # key → {up_bid, up_ask, down_bid, dow
 
 # ─── GLOBAL STATE ─────────────────────────────────────────────────────────────
 app_state = {
-    "bot_running": True,
+    "bot_running": False,
     "mode": "PAPER",
     "balance": 0.0,          # Gercek bakiye wallet'tan gelecek
     "session_pnl": 0.0,
@@ -243,6 +243,10 @@ async def simulation_tick():
                     merged_s = {**_ls(), **ev_s}
                     trade_count = _event_trade_counts.get(key, 0)
                     open_count  = _pos_tracker.get_active_count()
+                    # max_total_trades kontrolü (0 = sınırsız)
+                    max_total = int(merged_s.get("max_total_trades", 0))
+                    if max_total > 0 and sum(_event_trade_counts.values()) >= max_total:
+                        continue
                     asyncio.create_task(entry_service_task(
                         key, sym, mp, rules, merged_s, real, open_count, trade_count
                     ))
@@ -1405,6 +1409,11 @@ async def lifespan(app):
             pass
     else:
         app_state["safe_mode"] = False
+        # auto_start ayarı True ise bot restart'ta otomatik başlasın
+        if settings.get("auto_start", False):
+            app_state["bot_running"] = True
+            app_state["strategy_status"] = "SCANNING"
+            addlog("info", "auto_start=True — bot otomatik basladi")
 
     # ─── EXECUTION ENGINE BAŞLAT ─────────────────────────────────────────────
     if _EXEC_AVAILABLE:
