@@ -66,22 +66,39 @@ let _dragSym       = null; // drag-and-drop source
 let _rafPending    = false; // requestAnimationFrame batching
 let _prevCardVals  = {};   // key → {price, cd, upPct, dnPct, rules} — delta check
 
-// ─── Direkt Polymarket Feed ───────────────────────────────────────────────────
-// arbypoly gibi siteler Polymarket WS'e direkt tarayıcıdan bağlanır (1 hop, ~5ms).
-// POLYFLOW: backend sadece kural/trade için; fiyat görüntüleme direkt feedden.
-let _directClob   = null;  // CLOB WS — UP/DOWN token fiyatları (Polymarket)
-let _directRtds   = null;  // RTDS WS — Spot fiyatlar (Binance via Polymarket)
+// ─── Backend Authoritative Pricing (FAZ 3.5) ─────────────────────────────────
+// FAZ 3.5: Backend tek fiyat otoritesi.
+// Execution kararları YALNIZCA backend state'inden alınır.
+// Frontend direkt WS'ler devre dışı — fiyatlar backend broadcast'ten gelir.
+//
+// Debug modu için: tarayıcı konsolunda _enableDebugWs() yaz → direkt feed açılır.
+const _BACKEND_ONLY_MODE = true;  // false = eski direkt WS modu (debug)
+
+let _directClob   = null;  // CLOB WS — debug modda UP/DOWN token fiyatları
+let _directRtds   = null;  // RTDS WS — debug modda spot fiyatlar
 let _tokenMap     = {};    // tokenId → {key:'BTC_5M', side:'up'|'down'}
 let _symToKeys    = {};    // 'BTC' → ['BTC_5M','BTC_15M',...]
 let _directReady  = false; // asset state yüklendi mi?
 const RTDS_SYM_MAP = { btcusdt:'BTC', ethusdt:'ETH', solusdt:'SOL', xrpusdt:'XRP', dogeusdt:'DOGE', bnbusdt:'BNB', hypeusdt:'HYPE' };
 
-// ─── WS Price Caches ────────────────────────────────────────────────────────
-// Frontend CLOB/RTDS WS'den gelen fiyatlar burada saklanır.
-// Backend state_update her 500ms'de state.assets'i eziyor → WS değerleri kaybolur.
-// Çözüm: backend overwrite'tan sonra bu cache'lerden tekrar uygula → seesawing önle.
+// ─── WS Price Caches (debug modda kullanılır) ────────────────────────────────
+// BACKEND_ONLY_MODE=true: bu cache'ler _mergeState'te uygulanmaz.
+// BACKEND_ONLY_MODE=false: eski seesawing-önleme workaround'u aktif.
 const _wsMarketPrices = {}; // key → {up_ask, up_bid, down_ask, down_bid, ts}
 const _wsLivePrices   = {}; // sym → {val, ts}  — RTDS spot fiyatları (BTC/ETH/SOL...)
+
+// Debug WS açma (konsol)
+function _enableDebugWs() {
+  window._debugWsEnabled = true;
+  _maybeStartDirectFeeds();
+  console.warn('[PolyFlow] DEBUG: Direkt WS bağlantıları açıldı. Sadece görüntüleme — execution backend fiyatı kullanır.');
+}
+function _disableDebugWs() {
+  window._debugWsEnabled = false;
+  if (_directClob) { try { _directClob.close(); } catch(e){} _directClob = null; }
+  if (_directRtds) { try { _directRtds.close(); } catch(e){} _directRtds = null; }
+  console.log('[PolyFlow] DEBUG: Direkt WS kapatıldı. Backend-only mod aktif.');
+}
 
 // rAF + throttle batching — CLOB 1000+ msg/sn push eder.
 // Her kart için min 150ms görüntüleme süresi (göz okuyabilsin).
@@ -459,6 +476,15 @@ function _startDirectRtds() {
 let _knownFeedHash = '';
 function _maybeStartDirectFeeds() {
   if (!Object.keys(state.assets).length) return;
+
+  // FAZ 3.5: Backend-only modda direkt WS başlatma — sadece debug modda aç
+  if (_BACKEND_ONLY_MODE && !window._debugWsEnabled) {
+    // Token map'i güncelle (execution logic için hala gerekli)
+    _buildTokenMap();
+    _directReady = true;
+    return;
+  }
+
   // Hash: asset keys + token ID'lerini birlikte kontrol et (5dk window değişimi)
   const feedHash = Object.entries(state.assets)
     .sort(([a],[b]) => a.localeCompare(b))
@@ -549,25 +575,28 @@ function _mergeState(data) {
     });
 
     state.assets = data.assets;
-    // Backend state_update her 500ms'de state.assets'i tamamen eziyor → WS değerleri kaybolur
-    // Çözüm 1: CLOB WS market fiyatlarını geri uygula (up_ask/down_ask)
-    Object.entries(_wsMarketPrices).forEach(([k, wsc]) => {
-      if (!state.assets[k]) return;
-      if (!wsc.ts || Date.now() - wsc.ts > 10000) return; // 10sn stale → backend değeri kullan
-      if (!state.assets[k].market) state.assets[k].market = {};
-      if (wsc.up_ask   !== undefined) state.assets[k].market.up_ask   = wsc.up_ask;
-      if (wsc.up_bid   !== undefined) state.assets[k].market.up_bid   = wsc.up_bid;
-      if (wsc.down_ask !== undefined) state.assets[k].market.down_ask = wsc.down_ask;
-      if (wsc.down_bid !== undefined) state.assets[k].market.down_bid = wsc.down_bid;
-    });
-    // Çözüm 2: RTDS live_price'ı geri uygula (BTC/ETH/SOL spot)
-    Object.entries(state.assets).forEach(([k, a]) => {
-      const sym = a.symbol || k.split('_')[0];
-      const cached = _wsLivePrices[sym];
-      if (cached && cached.val > 0 && Date.now() - cached.ts < 15000) {
-        state.assets[k].live_price = cached.val;
-      }
-    });
+
+    // FAZ 3.5: Backend-only modda WS cache override YAPILMAZ
+    // Backend fiyatları tek otorite — seesawing kökten çözüldü.
+    if (!_BACKEND_ONLY_MODE || window._debugWsEnabled) {
+      // DEBUG modu: Eski workaround aktif (direkt WS fiyatları geri uygula)
+      Object.entries(_wsMarketPrices).forEach(([k, wsc]) => {
+        if (!state.assets[k]) return;
+        if (!wsc.ts || Date.now() - wsc.ts > 10000) return;
+        if (!state.assets[k].market) state.assets[k].market = {};
+        if (wsc.up_ask   !== undefined) state.assets[k].market.up_ask   = wsc.up_ask;
+        if (wsc.up_bid   !== undefined) state.assets[k].market.up_bid   = wsc.up_bid;
+        if (wsc.down_ask !== undefined) state.assets[k].market.down_ask = wsc.down_ask;
+        if (wsc.down_bid !== undefined) state.assets[k].market.down_bid = wsc.down_bid;
+      });
+      Object.entries(state.assets).forEach(([k, a]) => {
+        const sym = a.symbol || k.split('_')[0];
+        const cached = _wsLivePrices[sym];
+        if (cached && cached.val > 0 && Date.now() - cached.ts < 15000) {
+          state.assets[k].live_price = cached.val;
+        }
+      });
+    }
   }
   if (Array.isArray(data.pinned))                          state.pinned      = data.pinned;
   if (data.selected_asset)                                 state.selectedAsset = data.selected_asset;
@@ -1145,6 +1174,23 @@ function buildAssetChips(syms) {
 }
 
 // ─── Single Accordion Card ────────────────
+// ─── Price Freshness Badge (FAZ 3.5 — backend authoritative pricing) ─────────
+function _makePriceFreshnessBadge(a) {
+  const priceTs = a.price_ts || 0;  // ms, backend'den gelir
+  if (!priceTs) {
+    return '<span class="price-source-badge stale" title="Fiyat zamanı bilinmiyor">? BE</span>';
+  }
+  const ageMs = Date.now() - priceTs;
+  const ageSec = Math.round(ageMs / 1000);
+  if (ageMs < 5000) {
+    return `<span class="price-source-badge fresh" title="Backend fiyatı — ${ageSec}sn önce">⚡ BE</span>`;
+  } else if (ageMs < 15000) {
+    return `<span class="price-source-badge recent" title="Backend fiyatı — ${ageSec}sn önce">${ageSec}s BE</span>`;
+  } else {
+    return `<span class="price-source-badge stale" title="Fiyat stale — ${ageSec}sn önce">⚠ ${ageSec}s</span>`;
+  }
+}
+
 function renderEventCard(key) {
   const a = state.assets[key];
   if (!a) return '';
@@ -1818,7 +1864,10 @@ function renderEventBody(sym) {
     <!-- Col 2: Market Prices -->
     <div class="eac-body-col">
       <span class="eac-section-lbl">Market Prices
-        <span style="float:right;font-weight:700;color:${slipColor};">Slip ${(mp.slippage_pct||0).toFixed(2)}%</span>
+        <span style="float:right;display:flex;align-items:center;gap:6px;">
+          ${_makePriceFreshnessBadge(a)}
+          <span style="font-weight:700;color:${slipColor};">Slip ${(mp.slippage_pct||0).toFixed(2)}%</span>
+        </span>
       </span>
       <div class="outcome-row up" style="margin-bottom:8px;">
         <div class="outcome-indicator"></div>

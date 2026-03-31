@@ -3271,6 +3271,33 @@ body.modal-open { overflow: hidden; }
   background: rgba(220, 38, 38, 0.50);
 }
 
+/* Price source + freshness badge (FAZ 3.5 — backend authoritative pricing) */
+.price-source-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.price-source-badge.fresh {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--accent-green);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+.price-source-badge.recent {
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--accent-yellow);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+}
+.price-source-badge.stale {
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--accent-red);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+}
+
 /* ── Bot control buttons ── */
 .bot-controls {
   display: flex;

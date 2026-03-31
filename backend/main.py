@@ -266,6 +266,11 @@ async def simulation_tick():
                     "source":        "live",
                 }
 
+                # Fiyat tazeliği — entry_service.record_price_update() zamanı
+                price_ts = 0
+                if _EXEC_AVAILABLE:
+                    price_ts = int(_entry_svc._last_price_update.get(key, 0) * 1000)  # ms
+
                 asset_states[key] = {
                     "symbol":       sym,
                     "timeframe":    tf,
@@ -286,6 +291,8 @@ async def simulation_tick():
                     "slug":         real.get("slug", ""),
                     "ptb":          get_ptb(key),
                     "live_price":   get_live_price(sym),
+                    "price_ts":     price_ts,    # Son CLOB WS fiyat zamanı (ms)
+                    "price_source": "backend",   # Daima backend — authoritative pricing
                 }
 
             app_state["assets"] = asset_states
