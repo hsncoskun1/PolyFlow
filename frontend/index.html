@@ -77,6 +77,12 @@
         <span class="status-label">Bot</span>
         <span class="status-value"><span class="status-dot offline" id="bot-status-dot"></span><span id="bot-status-text">Durduruldu</span></span>
       </div>
+      <!-- Safe mode uyarısı — JS ile gösterilip gizlenir -->
+      <div class="status-row" id="safe-mode-warning" style="display:none;margin-top:4px;">
+        <div style="width:100%;padding:6px 10px;background:rgba(255,193,7,0.12);border:1px solid var(--accent-yellow);border-radius:var(--radius-sm);font-size:11px;color:var(--accent-yellow);text-align:center;">
+          ⚠️ SAFE MODE AKTİF<br><button onclick="disableSafeMode()" style="background:none;border:none;color:var(--accent-yellow);text-decoration:underline;cursor:pointer;font-size:11px;padding:2px 0;">Devre dışı bırak →</button>
+        </div>
+      </div>
       <!-- Bot başlatılmamışken: tek buton -->
       <div class="status-row" id="bot-start-row" style="margin-top:4px;">
         <button class="btn-bot-sidebar start" id="bot-toggle-btn" onclick="toggleBot()" style="width:100%;">▶ Bot Başlat</button>
@@ -86,6 +92,10 @@
         <button class="btn-bot-sidebar pause-half" id="btn-pause" onclick="pauseBot()">⏸ Duraklat</button>
         <button class="btn-bot-sidebar stop-half" id="btn-stop" onclick="stopBot()">⏹ Durdur</button>
       </div>
+      <!-- ACİL DURDUR butonu — her zaman görünür (bot çalışırken aktif) -->
+      <div class="status-row" id="emergency-stop-row" style="margin-top:6px;display:none;">
+        <button class="btn-emergency-stop" id="btn-emergency-stop" onclick="emergencyStop()" style="width:100%;">🛑 ACİL DURDUR</button>
+      </div>
       <div class="status-row">
         <span class="status-label">Durum</span>
         <span class="status-value text-purple" id="sidebar-mode">—</span>
@@ -93,6 +103,10 @@
       <div class="status-row">
         <span class="status-label">Çalışma</span>
         <span class="status-value text-mono" id="sidebar-runtime">00:00:00</span>
+      </div>
+      <div class="status-row">
+        <span class="status-label">Oturum PnL</span>
+        <span class="status-value text-mono" id="sidebar-session-pnl">$0.00</span>
       </div>
     </div>
   </aside>

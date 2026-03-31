@@ -16,6 +16,15 @@ logger = logging.getLogger("polyflow.positions")
 # In-memory storage — trade_id → PositionState
 _positions: Dict[str, PositionState] = {}
 
+# Session close callback — main.py inject eder (session PnL takibi için)
+_on_close_callback = None
+
+
+def set_close_callback(fn):
+    """main.py tarafından inject edilir — pozisyon kapanınca session PnL güncellenir."""
+    global _on_close_callback
+    _on_close_callback = fn
+
 
 # ─── Sorgu fonksiyonları ──────────────────────────────────────────────────────
 
@@ -197,6 +206,13 @@ def close_position(
         )
     except Exception:
         pass
+
+    # Session PnL callback
+    if _on_close_callback:
+        try:
+            _on_close_callback(trade_id, final_pnl, reason)
+        except Exception:
+            pass
 
     return pos
 

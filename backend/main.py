@@ -107,6 +107,7 @@ app_state = {
     "balance": 0.0,          # Gercek bakiye wallet'tan gelecek
     "session_pnl": 0.0,
     "session_start_balance": 0.0,
+    "safe_mode": False,        # Kalici — DB'den yuklenir, emergency stop ile set edilir
     "strategy_status": "SCANNING",
     "positions": [],
     "trade_history": [],
@@ -375,6 +376,7 @@ def _build_broadcast_payload() -> str:
         "trade_history":     app_state.get("trade_history", []),
         "connection_status": app_state.get("connection_status", {}),
         "strategy_status":   app_state.get("strategy_status", "SCANNING"),
+        "safe_mode":         app_state.get("safe_mode", False),
         "ws_client_count":   app_state.get("ws_client_count", 0),
         "asset_settings":    app_state.get("asset_settings", {}),
     }
@@ -1371,6 +1373,22 @@ async def lifespan(app):
     except Exception as e:
         addlog("warn", f"Startup scan hatasi: {e} — arka planda devam edilecek")
 
+    # ─── SAFE MODE KALICILIĞI — DB'den yükle ────────────────────────────────
+    from backend.storage.db import get_bot_state as _gbs
+    _saved_safe = _gbs("safe_mode", "false")
+    if _saved_safe == "true":
+        app_state["safe_mode"] = True
+        app_state["bot_running"] = False
+        app_state["strategy_status"] = "SAFE_MODE"
+        addlog("warn", "SAFE MODE kalici olarak aktif — bot baslatmak icin devre disi birakin")
+        try:
+            from backend.decision_log import log_bot_event
+            log_bot_event("SAFE_MODE_RESTORE", "Restart sonrasi safe_mode DB'den yuklendi")
+        except Exception:
+            pass
+    else:
+        app_state["safe_mode"] = False
+
     # ─── EXECUTION ENGINE BAŞLAT ─────────────────────────────────────────────
     if _EXEC_AVAILABLE:
         # Sell retry'ye market data getter'larını inject et
@@ -1385,9 +1403,16 @@ async def lifespan(app):
         )
         # DB'den önceki açık pozisyonları yükle (restart recovery)
         _pos_tracker.load_open_positions_from_db()
+        # Session PnL callback — pozisyon kapanınca app_state["session_pnl"] güncellenir
+        def _session_pnl_callback(trade_id: str, pnl: float, reason: str):
+            if reason != "HOLD_TO_RESOLUTION":
+                app_state["session_pnl"] = round(
+                    app_state.get("session_pnl", 0.0) + pnl, 4
+                )
+        _pos_tracker.set_close_callback(_session_pnl_callback)
         # LIVE modda client'ı önceden ısıt
         _order_exec.init_live_client()
-        addlog("success", "Execution engine hazır — FAZ 1 aktif")
+        addlog("success", "Execution engine hazir — FAZ 1 aktif")
 
     tasks = []
     try:
@@ -1648,12 +1673,18 @@ async def get_all_event_settings_ep():
 
 @app.post("/api/bot/start")
 async def start_bot():
+    # Safe mode aktifse bot baslatma
+    if app_state.get("safe_mode"):
+        addlog("warn", "Bot baslatma reddedildi — safe_mode aktif")
+        return {"ok": False, "error": "safe_mode_active",
+                "message": "Safe mode aktif — once /api/bot/safe-mode/disable ile devre disi birakin"}
     app_state["bot_running"] = True
     app_state["strategy_status"] = "SCANNING"
+    app_state["session_pnl"] = 0.0   # Yeni oturum — PnL sifirla
     addlog("info", "Bot STARTED")
     try:
         from backend.decision_log import log_bot_event
-        log_bot_event("BOT_START", "Bot manuel olarak başlatıldı")
+        log_bot_event("BOT_START", "Bot manuel olarak baslatildi")
     except Exception:
         pass
     return {"ok": True}
@@ -1662,11 +1693,53 @@ async def start_bot():
 async def stop_bot():
     app_state["bot_running"] = False
     app_state["strategy_status"] = "IDLE"
-    app_state["positions"] = []
     addlog("warn", "Bot STOPPED")
     try:
         from backend.decision_log import log_bot_event
         log_bot_event("BOT_STOP", "Bot manuel olarak durduruldu")
+    except Exception:
+        pass
+    return {"ok": True}
+
+@app.post("/api/bot/emergency-stop")
+async def emergency_stop():
+    """ACIL DURDUR — tum pozisyonlari force sell olarak isaretler + safe_mode kalici aktif."""
+    app_state["bot_running"] = False
+    app_state["strategy_status"] = "EMERGENCY_STOP"
+    app_state["safe_mode"] = True
+
+    # DB'ye kalici yaz
+    from backend.storage.db import set_bot_state as _sbs
+    _sbs("safe_mode", "true")
+
+    # Acik pozisyonlari force sell olarak isaretler (sell_retry kapatir)
+    force_count = 0
+    if _EXEC_AVAILABLE:
+        for pos in _pos_tracker.get_active_positions():
+            _pos_tracker.mark_force_sell(pos.trade_id)
+            force_count += 1
+        app_state["positions"] = _pos_tracker.to_app_state_positions()
+
+    addlog("warn", f"ACIL DURDUR — safe_mode kalici, {force_count} pozisyon FORCE_SELL isaretlendi")
+    try:
+        from backend.decision_log import log_bot_event
+        log_bot_event("EMERGENCY_STOP",
+                      f"Acil durdur: {force_count} pozisyon force_sell olarak isaretlendi")
+    except Exception:
+        pass
+    return {"ok": True, "force_sold": force_count}
+
+
+@app.post("/api/bot/safe-mode/disable")
+async def disable_safe_mode():
+    """Safe mode'u devre disi birak (acil durdur sonrasi yeniden baslatmak icin)."""
+    app_state["safe_mode"] = False
+    from backend.storage.db import set_bot_state as _sbs
+    _sbs("safe_mode", "false")
+    addlog("info", "Safe mode devre disi birakildi — bot baslatilabilir")
+    try:
+        from backend.decision_log import log_bot_event
+        log_bot_event("SAFE_MODE_DISABLED", "Safe mode kullanici tarafindan devre disi birakildi")
     except Exception:
         pass
     return {"ok": True}

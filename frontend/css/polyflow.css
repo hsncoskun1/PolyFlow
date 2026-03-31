@@ -3251,6 +3251,26 @@ body.modal-open { overflow: hidden; }
 }
 .btn-bot-sidebar.stop-half:hover { background: var(--accent-red-dim); }
 
+/* Emergency stop button */
+.btn-emergency-stop {
+  background: rgba(220, 38, 38, 0.15);
+  color: #ef4444;
+  border: 1px solid #ef4444;
+  border-radius: var(--radius-sm);
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s;
+  letter-spacing: 0.03em;
+}
+.btn-emergency-stop:hover {
+  background: rgba(220, 38, 38, 0.30);
+}
+.btn-emergency-stop:active {
+  background: rgba(220, 38, 38, 0.50);
+}
+
 /* ── Bot control buttons ── */
 .bot-controls {
   display: flex;

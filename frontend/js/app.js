@@ -8,6 +8,7 @@
 // ═══════════════════════════════════════════
 const state = {
   botRunning:    false,
+  safeMode:      false,
   mode:          'PAPER',
   connected:     false,
   currentPage:   'watchlist',
@@ -532,6 +533,7 @@ function _mergeState(data) {
   if (data.mode)                       state.mode         = data.mode;
   if (data.balance      !== undefined) state.balance      = data.balance;
   if (data.session_pnl  !== undefined) state.sessionPnl   = data.session_pnl;
+  if (data.safe_mode !== undefined) state.safeMode = data.safe_mode;
   if (data.assets    && typeof data.assets === 'object') {
     // Yeni event tespiti: slug değiştiyse WS fiyat cache'ini temizle
     // (eski event'in fiyatları yeni event için yanlış — seesawing kaynağı)
@@ -656,6 +658,36 @@ function updateSidebar() {
   // Bot status text (Turkish)
   const statusText = document.getElementById('bot-status-text');
   if (statusText) statusText.textContent = state.botRunning ? 'Çalışıyor' : 'Durduruldu';
+
+  // Safe mode warning
+  const safeModeWarn = document.getElementById('safe-mode-warning');
+  if (safeModeWarn) safeModeWarn.style.display = state.safeMode ? '' : 'none';
+
+  // Bot start button: safe mode aktifse gri + disabled
+  const toggleBtn = document.getElementById('bot-toggle-btn');
+  if (toggleBtn) {
+    if (state.safeMode && !state.botRunning) {
+      toggleBtn.disabled = true;
+      toggleBtn.style.opacity = '0.4';
+      toggleBtn.title = 'Safe mode aktif — devre dışı bırakın';
+    } else {
+      toggleBtn.disabled = false;
+      toggleBtn.style.opacity = '';
+      toggleBtn.title = '';
+    }
+  }
+
+  // Emergency stop button — bot çalışırken göster
+  const emergRow = document.getElementById('emergency-stop-row');
+  if (emergRow) emergRow.style.display = state.botRunning ? '' : 'none';
+
+  // Session PnL
+  const sesnPnlEl = document.getElementById('sidebar-session-pnl');
+  if (sesnPnlEl) {
+    const pnlVal = state.sessionPnl || 0;
+    sesnPnlEl.textContent = (pnlVal >= 0 ? '+' : '') + '$' + pnlVal.toFixed(2);
+    sesnPnlEl.className = 'status-value text-mono ' + (pnlVal >= 0 ? 'text-green' : 'text-red');
+  }
 
   // Track runtime
   if (state.botRunning && !_botStartTime) {
@@ -2032,6 +2064,27 @@ function pauseBot() {
 function stopBot() {
   if (!state.botRunning) return;
   fetch('/api/bot/stop', { method: 'POST' }).catch(() => {});
+}
+
+async function emergencyStop() {
+  if (!confirm('⚠️ ACİL DURDUR\n\nTüm açık pozisyonlar FORCE SELL olarak işaretlenecek ve safe mode aktif edilecek.\n\nDevam etmek istiyor musunuz?')) return;
+  try {
+    const r = await fetch('/api/bot/emergency-stop', { method: 'POST' });
+    const d = await r.json();
+    showToast(`🛑 ACİL DURDUR — ${d.force_sold || 0} pozisyon kapatılıyor. Safe mode aktif.`, 'warn');
+  } catch(e) {
+    showToast('ACİL DURDUR isteği gönderilemedi.', 'error');
+  }
+}
+
+async function disableSafeMode() {
+  if (!confirm('Safe mode devre dışı bırakılacak.\nBotu yeniden başlatabileceksiniz.\n\nOnaylıyor musunuz?')) return;
+  try {
+    await fetch('/api/bot/safe-mode/disable', { method: 'POST' });
+    showToast('Safe mode devre dışı bırakıldı.', 'info');
+  } catch(e) {
+    showToast('İstek gönderilemedi.', 'error');
+  }
 }
 
 function showBotBlockedModal(cfg) {
