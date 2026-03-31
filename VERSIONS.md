@@ -2,6 +2,26 @@
 
 ---
 
+## v2.1.0 — 2026-03-31
+
+### Modülerleştirme — Refactor Faz 1
+
+**Backend Extract**
+- `backend/state.py` oluşturuldu — `app_state`, `addlog`, `_log_buffer`, `DEFAULT_PINNED` merkezi depoda toplandı (circular import yok)
+- `backend/market/__init__.py` + `backend/market/ptb.py` oluşturuldu — PTB yöneticisi (170 satır) main.py'den ayrıştırıldı
+  - `RTDS_SYMBOLS`, `PTB_VARIANT`, `get_ptb`, `ptb_loop` (lambda `get_market_cache` parametresi ile)
+  - main.py satır sayısı: 2100 → 1945 (-155 satır)
+
+**Frontend Extract**
+- `frontend/js/utils.js` oluşturuldu — saf yardımcı fonksiyonlar (baseSym, keyTF, fmtCD, formatUSD, formatAssetPrice, setText, numVal, checkVal, showToast) app.js'den ayrıştırıldı
+- `frontend/js/settings-modal.js` oluşturuldu — event strateji modal tüm kod (EVENT_SETTING_FIELDS, AS_SECTIONS, AS_LAYOUT, _pctFields, openAssetSettings, onEventSettingInput, showConfirmPopup, saveEventSettings, clearEventSettings) app.js'den ayrıştırıldı
+  - app.js satır sayısı: 2865 → 2437 (-428 satır)
+- `frontend/index.html` güncellendi — yeni script tag'ler eklendi (utils.js → settings-modal.js → app.js)
+
+**Test**: Backend restart ✓, /api/status 200 ✓, utils.js 200 ✓, settings-modal.js 200 ✓
+
+---
+
 ## v2.0.0 — 2026-03-31
 
 ### Faz 7–8: Auto-Claim + Final Kapı Kontrolleri

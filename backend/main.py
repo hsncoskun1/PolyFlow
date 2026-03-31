@@ -1,4 +1,4 @@
-"""POLYFLOW - Main FastAPI Server v1.5 (Moduler Yapi + SQLite + RTDS)"""
+"""POLYFLOW - Main FastAPI Server v2.0 (Moduler Yapi + SQLite + RTDS)"""
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))  # POLYFLOW/ dizinini path'e ekle
@@ -23,6 +23,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from config import load_settings, save_settings, get_wallet_config
+
+# ─── MERKEZİ DURUM (app_state, addlog, _log_buffer) ─────────────────────────
+from backend.state import app_state, addlog, _log_buffer, DEFAULT_PINNED
+
+# ─── PTB YÖNETİCİSİ ──────────────────────────────────────────────────────────
+from backend.market.ptb import get_ptb, ptb_loop, RTDS_SYMBOLS
 
 logger = logging.getLogger("polyflow")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
@@ -58,8 +64,6 @@ ASSETS = {
     "BNB":  {"name": "BNB",          "icon": "◆",  "color": "#f3ba2f"},
     "HYPE": {"name": "Hyperliquid",  "icon": "⚡",  "color": "#4ade80"},
 }
-
-DEFAULT_PINNED = {"BTC_5M", "ETH_5M", "SOL_5M"}
 
 # ─── AUTO-DISCOVERY: Polymarket coin keşif dosyası ───────────────────────────
 DISCOVERED_FILE = BASE_DIR / "backend" / "discovered_assets.json"
@@ -103,36 +107,6 @@ _asset_phases: dict[str, str] = {}      # entry | position | exit
 _asset_phase_ticks: dict[str, int] = {}
 _asset_market: dict[str, dict] = {}     # key → {up_bid, up_ask, down_bid, down_ask, slippage_pct}
 
-# ─── GLOBAL STATE ─────────────────────────────────────────────────────────────
-app_state = {
-    "bot_running": False,
-    "mode": "PAPER",
-    "balance": 0.0,          # Gercek bakiye wallet'tan gelecek
-    "session_pnl": 0.0,
-    "session_start_balance": 0.0,
-    "safe_mode": False,        # Kalici — DB'den yuklenir, emergency stop ile set edilir
-    "strategy_status": "SCANNING",
-    "positions": [],
-    "trade_history": [],
-    "connection_status": {
-        "clob_ws": True, "btc_ws": True,
-        "user_ws": False, "gamma_api": True,
-    },
-    "ws_client_count": 0,
-    # Multi-asset fields
-    "assets": {},          # sym → asset state dict
-    "pinned": list(DEFAULT_PINNED),
-    "selected_asset": "BTC",
-    # Legacy single-asset fields (filled from selected_asset)
-    "btc_price": 84250.0,
-    "btc_change": 0.0,
-    "countdown": 200,
-    "active_event": None,
-    "events": [],
-    "market_prices": {},
-    "rules": {},
-}
-
 # ─── HELPERS ──────────────────────────────────────────────────────────────────
 from backend.strategy.engine import evaluate_rules as _evaluate_rules
 
@@ -158,15 +132,6 @@ def _make_asset_rules(sym: str, cd: int = 150, mp: dict = None, key: str = None)
         merged = global_settings
     return _evaluate_rules(sym, cd, mp, app_state["positions"], merged)
 
-
-# ─── LOG BUFFER ───────────────────────────────────────────────────────────────
-_log_buffer: list[dict] = []
-
-def addlog(level: str, message: str):
-    e = {"time": datetime.now().strftime("%H:%M:%S"), "level": level, "message": message}
-    _log_buffer.insert(0, e)
-    if len(_log_buffer) > 300:
-        _log_buffer.pop()
 
 
 # ─── STATE UPDATE TICK (tüm veri Polymarket'ten) ────────────────────────────
@@ -787,179 +752,6 @@ def _init_single_asset(sym: str):
     _asset_phase_ticks[sym] = 0
 
 
-# ─── PTB (Price to Beat) YÖNETİCİSİ ─────────────────────────────────────────
-# Her event icin acilis referans fiyatini (openPrice) cekerler.
-# Kaynak 1: Gamma API events endpoint → eventMetadata.priceToBeat
-# Kaynak 2: __NEXT_DATA__ scraping → openPrice (fallback)
-# PTB bir kez kilitlenir ve event boyunca degismez.
-
-_ptb_cache: dict[str, float] = {}      # key (BTC_5M) → openPrice
-_ptb_locked: dict[str, bool] = {}      # key → kilitlendi mi
-_ptb_task = None
-
-# Coin isimleri → RTDS subscription (canli fiyat icin)
-# Topic: crypto_prices (Binance kaynakli), sembol formati: btcusdt
-RTDS_SYMBOLS = {
-    "BTC": "btcusdt", "ETH": "ethusdt", "SOL": "solusdt",
-    "XRP": "xrpusdt", "DOGE": "dogeusdt", "BNB": "bnbusdt", "HYPE": "hypeusdt",
-}
-
-# Variant map (TF → Polymarket past-results variant)
-PTB_VARIANT = {
-    "5M": "fiveminute", "15M": "fifteen", "1H": "hourly",
-    "4H": "fourhour", "1D": "daily",
-}
-
-
-async def _fetch_ptb_gamma(slug: str) -> float | None:
-    """Gamma API events endpoint'inden eventMetadata.priceToBeat cek."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"{GAMMA_BASE}/events", params={"slug": slug})
-            if resp.status_code != 200:
-                return None
-            data = resp.json()
-            if not data:
-                return None
-            ev = data[0] if isinstance(data, list) else data
-            metadata = ev.get("eventMetadata")
-            if metadata:
-                if isinstance(metadata, str):
-                    try: metadata = json.loads(metadata)
-                    except: return None
-                ptb = metadata.get("priceToBeat")
-                if ptb and float(ptb) > 0:
-                    return round(float(ptb), 2)
-    except Exception as e:
-        logger.warning(f"Gamma PTB hatasi ({slug}): {e}")
-    return None
-
-
-async def _fetch_ptb_next_data(slug: str, symbol: str, variant: str) -> float | None:
-    """Polymarket event sayfasindan __NEXT_DATA__ ile openPrice cek."""
-    try:
-        url = f"https://polymarket.com/event/{slug}"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
-            "Accept": "text/html",
-        }
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-            resp = await client.get(url, headers=headers)
-            if resp.status_code != 200:
-                return None
-            html = resp.text
-
-        match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL)
-        if not match:
-            return None
-
-        root = json.loads(match.group(1))
-        queries = root.get("props", {}).get("pageProps", {}).get("dehydratedState", {}).get("queries", [])
-
-        for q in queries:
-            key = q.get("queryKey", [])
-            if (len(key) >= 5 and key[0] == "crypto-prices" and key[1] == "price"
-                    and str(key[2]).upper() == symbol.upper()
-                    and key[4] == variant):
-                data = q.get("state", {}).get("data")
-                if isinstance(data, dict):
-                    op = data.get("openPrice")
-                    cp = data.get("closePrice")
-                    # Sadece aktif candle (closePrice=None)
-                    if op and cp is None:
-                        return round(float(op), 2)
-    except Exception as e:
-        logger.warning(f"__NEXT_DATA__ PTB hatasi ({slug}): {e}")
-    return None
-
-
-def get_ptb(key: str) -> float:
-    """Belirli event key'i icin PTB degerini don."""
-    return _ptb_cache.get(key, 0.0)
-
-
-_ptb_slug_map: dict[str, str] = {}   # key → son kilitli slug (slug degisince sifirla)
-
-async def _ptb_loop():
-    """Her event icin PTB'yi dene — slug degisince sifirla, __NEXT_DATA__ birincil."""
-    global _ptb_cache, _ptb_locked, _ptb_slug_map
-    while True:
-        try:
-            now_ts = time.time()
-            # Priority: işlem açılacaklar (pinned) first
-            _all_market_keys = list(_market_cache.keys())
-            _pinned_set = set(app_state.get("pinned", []))
-            _ordered_market_keys = [k for k in _all_market_keys if k in _pinned_set] + [k for k in _all_market_keys if k not in _pinned_set]
-            for key in _ordered_market_keys:
-                real = _market_cache.get(key)
-                if real is None: continue
-                slug = real.get("slug", "")
-                if not slug:
-                    continue
-
-                # Slug degistiyse (yeni event) → eski PTB'yi sifirla, hemen yeni fetch
-                # old_slug yoksa (ilk kez) → slug_changed=True say, hemen fetch yap
-                old_slug = _ptb_slug_map.get(key, "")
-                slug_changed = (not old_slug) or (old_slug != slug)
-                if slug_changed and old_slug and old_slug != slug:
-                    _ptb_locked.pop(key, None)
-                    _ptb_cache.pop(key, None)
-                    _ptb_slug_map[key] = slug
-                    addlog("info", f"Yeni slug: {key} — PTB sifirlandi, aninda fetch deneniyor")
-
-                # Zaten bu slug icin kilitliyse atla
-                if _ptb_locked.get(key):
-                    continue
-
-                # Event bitmisse atla
-                end_ts = real.get("end_ts", 0)
-                if end_ts <= now_ts:
-                    _ptb_locked.pop(key, None)
-                    _ptb_cache.pop(key, None)
-                    continue
-
-                sym = key.split("_")[0]
-                tf = key.split("_")[1] if "_" in key else "5M"
-
-                ptb = None
-
-                # Yontem 1 (birincil): __NEXT_DATA__ scraping — birebir dogru
-                variant = PTB_VARIANT.get(tf, "fiveminute")
-                ptb = await _fetch_ptb_next_data(slug, sym, variant)
-
-                # Yontem 2 (fallback): Gamma API eventMetadata.priceToBeat
-                if not ptb:
-                    ptb = await _fetch_ptb_gamma(slug)
-
-                if ptb and ptb > 0:
-                    _ptb_cache[key] = ptb
-                    _ptb_locked[key] = True
-                    _ptb_slug_map[key] = slug
-                    addlog("success", f"PTB kilitlendi: {key} = ${ptb:,.2f}")
-                elif slug_changed:
-                    # Yeni event PTB'si henuz hazir degil — 2sn sonra hemen tekrar dene
-                    # NOT: Eski PTB asla kullanilmaz — her zaman Polymarket'ten taze deger gerekir
-                    await asyncio.sleep(2)
-                    ptb2 = await _fetch_ptb_next_data(slug, sym, variant)
-                    if not ptb2:
-                        ptb2 = await _fetch_ptb_gamma(slug)
-                    if ptb2 and ptb2 > 0:
-                        _ptb_cache[key] = ptb2
-                        _ptb_locked[key] = True
-                        _ptb_slug_map[key] = slug
-                        addlog("success", f"PTB 2. deneme basarili: {key} = ${ptb2:,.2f}")
-                    else:
-                        # PTB alinamadi — delta '...' gosterilecek (stale deger kullanilmaz)
-                        addlog("info", f"PTB bekleniyor: {key} (sonraki dongu deneyecek)")
-
-                # Rate limit korumasi: her event arasi 0.5sn bekle
-                await asyncio.sleep(0.5)
-
-        except Exception as e:
-            logger.error(f"PTB dongusu hatasi: {e}")
-
-        # Her 10 saniyede tekrar kontrol (yeni eventler icin)
-        await asyncio.sleep(10)
 
 
 async def broadcast_rate_limit(retry_after: int = 60):
@@ -1451,7 +1243,7 @@ async def lifespan(app):
         tasks.append(asyncio.create_task(clob_ws_connect()))
         tasks.append(asyncio.create_task(clob_midpoint_poll()))
         tasks.append(asyncio.create_task(relayer_health_loop()))
-        tasks.append(asyncio.create_task(_ptb_loop()))
+        tasks.append(asyncio.create_task(ptb_loop(lambda: _market_cache)))
         await start_rtds()  # RTDS WebSocket — canli coin fiyatlari
 
         # Execution servisleri başlat
