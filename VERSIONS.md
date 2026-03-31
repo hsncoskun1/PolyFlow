@@ -2,6 +2,26 @@
 
 ---
 
+## v2.4.0 — 2026-03-31
+
+### Modülerleştirme — Refactor Faz 3 (Scan + WS + Positions)
+
+**Backend:**
+- `backend/market/registry.py` (69 satır): `COIN_REGISTRY`, `ASSETS`, `_save_discovered`, `_load_discovered` — main.py'den ayrıştırıldı
+- `backend/market/scan.py` (596 satır): Tüm Gamma scan/discovery sistemi — `_market_cache`, `TF_SECONDS`, `_discovered_timeframes`, `get_active_timeframes`, `scan_slug_based`, `discovery_scan`, `scan_gamma_markets`, `refresh_cached_slugs`, `gamma_scan_loop`
+- **Circular import çözümü:** `inject_scan_deps(asset_market, asset_phases, asset_phase_ticks, on_new_event, on_rate_limit)` — lifespan'da bir kez çağrılır
+- **Rebinding sorunu çözümü:** `get_market_cache()` / `get_market_cache_ts()` getter'ları — `_market_cache = new_dict` reassignment lambda'ları bozmaz
+- main.py: 1651 → 1091 satır (**−560**)
+
+**Frontend:**
+- `frontend/js/ws.js` (549 satır): Debug direkt feed (CLOB/RTDS), `connectWS`, `wsSend`, `_mergeState`, `handleStateUpdate` — app.js'den ayrıştırıldı
+- `frontend/js/positions.js` (79 satır): `updatePositionsPage`, `updateHistoryPage` — app.js'den ayrıştırıldı
+- app.js: 1752 → 1141 satır (**−611**)
+- Script yükleme sırası: `utils.js` → `settings-modal.js` → `cards.js` → `ws.js` → `positions.js` → `app.js`
+- Test: API ✓ syntax ✓ GitHub push ✓
+
+---
+
 ## v2.3.0 — 2026-03-31
 
 ### Modülerleştirme — Refactor Faz 2b (Cards Extract) + Settings İyileştirme
