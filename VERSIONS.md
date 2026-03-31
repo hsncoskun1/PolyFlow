@@ -2,6 +2,30 @@
 
 ---
 
+## v1.9.0 — 2026-03-31
+
+### Faz 5–6: Bug Düzeltmeleri + PERCENT Mod
+
+**Bug Düzeltmeleri**
+- **CLOSED pozisyon in-memory bug:** `to_app_state_positions()` CLOSED pozisyonları artık frontend listesinden filtreler. Önceden FORCE_SELL/SL sonrası pozisyon bellekte kalıyor, `event_limit` ve `max_positions` kurallarını bloke ediyordu.
+- **app.js syntax hatası:** `ptbEl` duplicate `const` bildirimi (L1095) giderildi — tüm JS fonksiyonları artık yükleniyor.
+- **strategy_mode wiring:** Modal üzerinden kayıt her zaman `strategy_mode: 'PERCENT'` gönderiyor; backend whitelist'e eklendi.
+
+**Faz 5 — Test & Doğrulama**
+- PTB değeri event bazında doğrulandı (`btc_delta = live_price - PTB`)
+- UP/DOWN semantiği: delta pozitifken UP yüksek, DOWN düşük ✓
+- Time rule semantiği: `min_entry_seconds < countdown ≤ time_rule_threshold` → "pass" ✓
+- PERCENT mod: `entry × (1 ± pct%) `, clamp 0.99 / floor 0.01 ✓
+- Wired UI: modal → `strategy_mode: PERCENT` backend'e ulaşıyor ✓
+
+**Faz 6 — NUMERIC Mod Kaldırıldı**
+- `_calc_targets()` NUMERIC branch silindi — her zaman % hesaplama
+- `config.py`: global default `target_exit_pct: 20%`, `stop_loss_pct: 15%`
+- `EVENT_SETTINGS_FIELDS`: `target_exit_price`/`stop_loss_price` whitelist'ten çıkarıldı
+- `settings.json`: eski NUMERIC alanlar temizlendi
+
+---
+
 ## v1.8.0 — 2026-03-31
 
 ### Event Settings Modal — UI/UX Optimizasyonu

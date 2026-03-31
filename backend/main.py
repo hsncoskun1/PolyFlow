@@ -1450,6 +1450,19 @@ async def lifespan(app):
             await _sell_retry.start()      # TP/SL/Force 100ms loop
             await _reconciler.start()      # 30s token balance reconciliation
             await _user_ws.start()         # CLOB user fill events
+            # Auto-claim: HOLD_TO_RESOLUTION pozisyonları event resolve sonrası redeem
+            from backend.execution.relayer import auto_claim_loop
+            def _claim_close_cb(trade_id, exit_price, pnl, reason):
+                _pos_tracker.close_position(trade_id, exit_price, reason)
+                app_state["positions"] = _pos_tracker.to_app_state_positions()
+                app_state["session_pnl"] = round(app_state.get("session_pnl", 0.0) + pnl, 4)
+                addlog("success", f"Auto-claim tamamlandı: {trade_id} | pnl: {pnl:+.4f}")
+            tasks.append(asyncio.create_task(auto_claim_loop(
+                pos_tracker=_pos_tracker,
+                countdown_getter=lambda k: max(0, int(_market_cache.get(k, {}).get("end_ts", 0)) - int(time.time())),
+                close_callback=_claim_close_cb,
+                mode_getter=lambda: app_state.get("mode", "PAPER"),
+            )))
 
         yield
     finally:
