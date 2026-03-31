@@ -2,6 +2,26 @@
 
 ---
 
+## v2.3.0 — 2026-03-31
+
+### Modülerleştirme — Refactor Faz 2b (Cards Extract) + Settings İyileştirme
+
+**Frontend cards.js Extract**
+- `frontend/js/cards.js` oluşturuldu (686 satır) — kart render fonksiyonları app.js'den ayrıştırıldı
+  - Taşınan fonksiyonlar: `updateCardsInPlace`, `playGoAlert`, `showGoBanner`, `buildAssetChips`, `_makePriceFreshnessBadge`, `renderEventCard`, `renderEventBody`
+  - Taşınan state: `_prevPrices`, `_goAlerted` (yalnızca cards fonksiyonları tarafından kullanılıyor)
+  - `_prevCardVals` app.js'te kaldı (`_mergeState` da kullanıyor)
+  - app.js satır sayısı: 2436 → 1752 (-684 satır)
+- `index.html` script sırası: `utils.js` → `settings-modal.js` → `cards.js` → `app.js`
+- Test: API ✓ syntax ✓
+
+**Settings Modal — Alan İsimleri ve Sırası**
+- `time_rule_threshold` etiketi: "Zaman Kuralı" → "Max Kalan Süre"
+- Modal sırası: `min_entry_seconds` (Min Kalan) önce, `time_rule_threshold` (Max Kalan) sonra
+- Mantıksal sıra: "en az X sn kalsın" → "en fazla X sn kaldığında giriş yap"
+
+---
+
 ## v2.2.0 — 2026-03-31
 
 ### Modülerleştirme — Refactor Faz 2 (API Routes)
