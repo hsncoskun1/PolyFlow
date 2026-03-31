@@ -1712,10 +1712,12 @@ async function _doSaveEventSettings(key, startTrading, payload) {
   if (msg) { msg.textContent = ''; msg.className = 'as-save-msg'; }
 
   try {
+    // Modal her zaman % tabanlı — strategy_mode: PERCENT ekle
+    const bodyToSend = { ...payload, strategy_mode: 'PERCENT' };
     const res = await fetch(`/api/settings/${encodeURIComponent(key)}`, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify(payload),
+      body: JSON.stringify(bodyToSend),
     });
     const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.error || 'Sunucu hatası');

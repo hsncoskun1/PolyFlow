@@ -1656,7 +1656,7 @@ EVENT_SETTINGS_FIELDS = [
     "stop_loss_enabled", "force_sell_enabled",
     "force_sell_before_resolution_seconds",
     "sell_retry_count", "order_amount",
-    "target_exit_pct", "stop_loss_pct", "exit_mode",
+    "target_exit_pct", "stop_loss_pct", "exit_mode", "strategy_mode",
     "order_amount_pct", "amount_mode",
 ]
 
