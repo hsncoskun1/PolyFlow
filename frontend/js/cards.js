@@ -71,6 +71,7 @@ function updateCardsInPlace(keys) {
     }
     const livePriceEl = card.querySelector('.eac-live-price');
     const priceSepEl  = card.querySelector('.eac-price-sep');
+    const deltaEl     = card.querySelector('.eac-inline-delta');
     if (a.live_price && a.live_price > 0) {
       const lpStr = '$' + Number(a.live_price).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
       if (livePriceEl) {
@@ -80,14 +81,25 @@ function updateCardsInPlace(keys) {
         const ptbRow = ptbEl?.parentElement;
         if (ptbRow) {
           if (!ptbRow.querySelector('.eac-price-sep')) {
-            ptbRow.insertAdjacentHTML('beforeend', `<span class="eac-price-sep">|</span><span class="eac-live-price">${lpStr}</span>`);
+            ptbRow.insertAdjacentHTML('beforeend', `<span class="eac-price-sep">|</span><span class="eac-anlık-label">ANLIK</span><span class="eac-live-price">${lpStr}</span>`);
           }
         }
       }
       if (priceSepEl) priceSepEl.style.display = '';
+      // Delta inline güncelle
+      const d = mp.btc_delta != null ? mp.btc_delta : (a.ptb ? a.live_price - a.ptb : null);
+      if (deltaEl && d != null) {
+        const pos = d >= 0;
+        deltaEl.textContent = (pos ? 'Δ+$' : 'Δ-$') + Math.abs(d).toFixed(2);
+        deltaEl.className = 'eac-inline-delta ' + (pos ? 'pos' : 'neg');
+        deltaEl.style.display = '';
+      } else if (deltaEl) {
+        deltaEl.style.display = 'none';
+      }
     } else {
       if (livePriceEl) livePriceEl.style.display = 'none';
       if (priceSepEl)  priceSepEl.style.display  = 'none';
+      if (deltaEl)     deltaEl.style.display      = 'none';
     }
 
     // Price diff for rule calculations
@@ -398,7 +410,8 @@ function renderEventCard(key) {
         <div class="eac-price-row">
           <span class="eac-ptb-label">PTB</span>
           <span class="eac-ptb-val">${a.ptb ? '$' + Number(a.ptb).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}) : '...'}</span>
-          ${a.live_price ? `<span class="eac-price-sep">|</span><span class="eac-live-price">$${Number(a.live_price).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}</span>` : ''}
+          ${a.live_price ? `<span class="eac-price-sep">|</span><span class="eac-anlık-label">ANLIK</span><span class="eac-live-price">$${Number(a.live_price).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}</span>` : ''}
+          ${btcDelta != null ? `<span class="eac-inline-delta ${btcDelta >= 0 ? 'pos' : 'neg'}">${btcDelta >= 0 ? 'Δ+$' : 'Δ-$'}${Math.abs(btcDelta).toFixed(2)}</span>` : `<span class="eac-inline-delta" style="display:none"></span>`}
         </div>
       </div>
     </div>

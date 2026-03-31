@@ -2471,10 +2471,14 @@ body.modal-open { overflow: hidden; }
 }
 .eac-price-up  { color: var(--accent-green); font-weight: 600; }
 .eac-price-dn  { color: var(--accent-red); font-weight: 600; }
-.eac-ptb-label { color: var(--text-muted); font-weight: 700; font-size: 9px; text-transform: uppercase; }
-.eac-ptb-val   { color: var(--accent-yellow); font-weight: 600; }
-.eac-live-price { color: var(--accent-green); font-weight: 700; }
-.eac-price-sep { color: var(--border-primary); font-size: 8px; }
+.eac-ptb-label   { color: var(--text-muted); font-weight: 700; font-size: 9px; text-transform: uppercase; }
+.eac-ptb-val     { color: var(--accent-yellow); font-weight: 600; }
+.eac-anlık-label { color: var(--text-muted); font-weight: 700; font-size: 9px; text-transform: uppercase; }
+.eac-live-price  { color: #fff; font-weight: 700; font-size: 11px; }
+.eac-price-sep   { color: var(--border-primary); font-size: 8px; }
+.eac-inline-delta { font-weight: 700; font-size: 10px; font-family: var(--font-mono); }
+.eac-inline-delta.pos { color: var(--accent-green); }
+.eac-inline-delta.neg { color: var(--accent-red); }
 
 /* Clickable title link */
 .eac-name-link {

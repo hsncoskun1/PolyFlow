@@ -108,7 +108,8 @@ async def simulation_tick():
         await asyncio.sleep(0.05)
         try:
             asset_states = {}
-            now_ts = int(time.time())
+            now_ts_f  = time.time()           # float — milisaniye hassasiyeti için
+            now_ts    = int(now_ts_f)
             pinned_set = set(app_state["pinned"])
             # Pozisyon lookuplarını ön hesapla — her event için linear scan yapmamak için
             open_sym_set = {p.get("asset") for p in app_state["positions"]}
@@ -120,7 +121,7 @@ async def simulation_tick():
                     continue
 
                 tf    = real.get("timeframe", "5M")
-                cd    = max(0, int(real["end_ts"]) - now_ts)
+                cd    = max(0.0, real["end_ts"] - now_ts_f)   # float: 145.3sn hassasiyeti
                 mp    = _asset_market.get(key, {})
 
                 # Fiyat kaynagi onceligine gore:
@@ -312,6 +313,7 @@ async def entry_service_task(key, sym, mp, rules, settings, market_info, open_co
 
 # ─── BROADCAST ────────────────────────────────────────────────────────────────
 _last_broadcast_hash: str = ""
+_last_force_broadcast_ts: float = 0.0
 
 def _build_broadcast_payload() -> str:
     """Sadece hızlı değişen alanları gönder — events alanı assets.event ile aynı, duplicate."""
@@ -334,7 +336,7 @@ def _build_broadcast_payload() -> str:
 
 
 async def broadcast_state(force: bool = False):
-    global _last_broadcast_hash
+    global _last_broadcast_hash, _last_force_broadcast_ts
     if not ws_clients:
         return
     try:
@@ -343,12 +345,15 @@ async def broadcast_state(force: bool = False):
         logger.error(f"serialize error: {e}")
         return
 
-    # Change detection — sadece data değiştiyse gönder (CPU ve bant genişliği tasarrufu)
+    # Change detection — sadece data değiştiyse gönder
+    # Ama en fazla 200ms'de bir force broadcast yap (countdown/delta güncelleme garantisi)
     if not force:
         h = str(hash(payload))
-        if h == _last_broadcast_hash:
+        now = time.time()
+        if h == _last_broadcast_hash and (now - _last_force_broadcast_ts) < 0.2:
             return
         _last_broadcast_hash = h
+        _last_force_broadcast_ts = now
 
     dead = set()
     for client in ws_clients:

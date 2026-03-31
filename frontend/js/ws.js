@@ -46,7 +46,7 @@ function _disableDebugWs() {
 let _directRafPending = false;
 const _dirtyKeys      = new Set();
 const _cardLastShown  = {};  // key → timestamp — throttle için
-const DISPLAY_THROTTLE_MS = 100; // min kart güncelleme aralığı
+const DISPLAY_THROTTLE_MS = 50; // min kart güncelleme aralığı (50ms = 20fps)
 
 function _scheduleDirectUpdate(key) {
   const now = Date.now();
