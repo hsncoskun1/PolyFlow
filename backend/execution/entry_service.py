@@ -133,6 +133,12 @@ async def try_open_position(
     )
     if not approved:
         logger.debug(f"Entry reddedildi [{event_key}]: {reason}")
+        # Kural geçmişi varsa SKIP logla (rules-pass + risk-block durumları değerli)
+        try:
+            from backend.decision_log import log_skip
+            log_skip(event_key, reason, rules, entry_price=mp.get("up_ask", 0))
+        except Exception:
+            pass
         return False
 
     # ─── Hangi taraf? ────────────────────────────────────────────────────────
@@ -172,6 +178,12 @@ async def try_open_position(
         if actual_price is None:
             unlock_event(event_key)
             logger.error(f"Order execute başarısız [{event_key}]")
+            # SKIP: order dolmadı
+            try:
+                from backend.decision_log import log_skip
+                log_skip(event_key, "order_not_filled", rules, side, entry_price)
+            except Exception:
+                pass
             return False
 
         # PERCENT modda gerçek fill'den yeniden hesapla
@@ -195,6 +207,14 @@ async def try_open_position(
             f"Entry başarılı [{event_key}] — {side} @ {actual_price:.4f} | "
             f"TP: {exit_target:.4f} | SL: {stop_loss_price:.4f} | ${amount}"
         )
+
+        # Audit log — ENTRY
+        try:
+            from backend.decision_log import log_entry
+            log_entry(event_key, side, actual_price, amount, rules, pos.trade_id)
+        except Exception:
+            pass
+
         return True
 
     except Exception as e:

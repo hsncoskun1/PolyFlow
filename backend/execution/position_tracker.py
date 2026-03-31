@@ -181,6 +181,23 @@ def close_position(
         f"Pozisyon kapandı [{reason}] [{trade_id}] — "
         f"{pos.side} @ {pos.entry_actual:.4f} → {exit_price:.4f} | PnL: {pnl_str}"
     )
+
+    # Audit log — EXIT
+    try:
+        from backend.decision_log import log_exit
+        log_exit(
+            event_key=pos.event_key,
+            trade_id=trade_id,
+            exit_price=exit_price,
+            reason=reason,
+            pnl=final_pnl,
+            side=pos.side,
+            entry_price=pos.entry_actual,
+            amount=pos.amount,
+        )
+    except Exception:
+        pass
+
     return pos
 
 

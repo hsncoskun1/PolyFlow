@@ -1651,6 +1651,11 @@ async def start_bot():
     app_state["bot_running"] = True
     app_state["strategy_status"] = "SCANNING"
     addlog("info", "Bot STARTED")
+    try:
+        from backend.decision_log import log_bot_event
+        log_bot_event("BOT_START", "Bot manuel olarak başlatıldı")
+    except Exception:
+        pass
     return {"ok": True}
 
 @app.post("/api/bot/stop")
@@ -1659,6 +1664,11 @@ async def stop_bot():
     app_state["strategy_status"] = "IDLE"
     app_state["positions"] = []
     addlog("warn", "Bot STOPPED")
+    try:
+        from backend.decision_log import log_bot_event
+        log_bot_event("BOT_STOP", "Bot manuel olarak durduruldu")
+    except Exception:
+        pass
     return {"ok": True}
 
 @app.get("/api/assets")
@@ -1711,6 +1721,14 @@ async def get_daily_stats():
     """Gunluk istatistikler."""
     from backend.storage.db import get_daily_trade_count, get_daily_pnl
     return {"daily_trades": get_daily_trade_count(), "daily_pnl": get_daily_pnl()}
+
+@app.get("/api/audit")
+async def get_audit_log(key: str = "", limit: int = 100):
+    """Karar gunlugu — her entry/skip/exit kararinin sebepleri."""
+    from backend.storage.db import get_audit_log, get_audit_stats
+    entries = get_audit_log(event_key=key, limit=min(limit, 500))
+    stats   = get_audit_stats()
+    return {"logs": entries, "stats": stats, "count": len(entries)}
 
 @app.get("/api/markets/matched")
 async def get_matched_markets():

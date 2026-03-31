@@ -86,6 +86,31 @@ def init_db():
             settings_json TEXT NOT NULL,
             updated_at TEXT DEFAULT (datetime('now'))
         );
+
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_key TEXT NOT NULL,
+            decision TEXT NOT NULL,
+            reason TEXT,
+            side TEXT DEFAULT '',
+            entry_price REAL DEFAULT 0,
+            exit_price REAL DEFAULT 0,
+            pnl REAL DEFAULT 0,
+            amount REAL DEFAULT 0,
+            rules_snapshot TEXT DEFAULT '{}',
+            trade_id TEXT DEFAULT '',
+            timestamp TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_audit_event_key ON audit_log(event_key);
+        CREATE INDEX IF NOT EXISTS idx_audit_decision ON audit_log(decision);
+        CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log(timestamp);
+
+        CREATE TABLE IF NOT EXISTS bot_state (
+            key TEXT PRIMARY KEY,
+            value TEXT,
+            updated_at REAL DEFAULT (strftime('%s','now'))
+        );
         """)
         conn.commit()
     finally:
@@ -277,6 +302,95 @@ def get_all_event_settings() -> dict:
             except Exception:
                 pass
         return result
+    finally:
+        conn.close()
+
+
+# ─── Audit Log ───────────────────────────────────────────────────────────────
+
+def save_audit_log(entry: dict):
+    """Karar günlüğüne bir kayıt ekle."""
+    conn = get_conn()
+    try:
+        conn.execute("""
+            INSERT INTO audit_log
+            (event_key, decision, reason, side, entry_price, exit_price,
+             pnl, amount, rules_snapshot, trade_id, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            entry.get("event_key", ""),
+            entry.get("decision", ""),
+            entry.get("reason", ""),
+            entry.get("side", ""),
+            entry.get("entry_price", 0),
+            entry.get("exit_price", 0),
+            entry.get("pnl", 0),
+            entry.get("amount", 0),
+            entry.get("rules_snapshot", "{}"),
+            entry.get("trade_id", ""),
+            entry.get("timestamp", datetime.now().isoformat()),
+        ))
+        conn.commit()
+    except Exception as e:
+        logger.error(f"save_audit_log hata: {e}")
+    finally:
+        conn.close()
+
+
+def get_audit_log(event_key: str = "", limit: int = 100) -> list[dict]:
+    """Karar günlüğünü çek. event_key verilmezse tüm kayıtlar."""
+    conn = get_conn()
+    try:
+        if event_key:
+            rows = conn.execute(
+                "SELECT * FROM audit_log WHERE event_key=? ORDER BY id DESC LIMIT ?",
+                (event_key, limit)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM audit_log ORDER BY id DESC LIMIT ?",
+                (limit,)
+            ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_audit_stats() -> dict:
+    """Karar istatistikleri (toplam entry/skip/exit sayıları)."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT decision, COUNT(*) as cnt FROM audit_log GROUP BY decision"
+        ).fetchall()
+        return {r["decision"]: r["cnt"] for r in rows}
+    finally:
+        conn.close()
+
+
+# ─── Bot State ────────────────────────────────────────────────────────────────
+
+def get_bot_state(key: str, default=None):
+    """Kalıcı bot state değeri oku."""
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT value FROM bot_state WHERE key=?", (key,)).fetchone()
+        return row["value"] if row else default
+    finally:
+        conn.close()
+
+
+def set_bot_state(key: str, value: str):
+    """Kalıcı bot state değeri yaz."""
+    conn = get_conn()
+    try:
+        conn.execute("""
+            INSERT INTO bot_state (key, value, updated_at)
+            VALUES (?, ?, strftime('%s','now'))
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value,
+                                           updated_at=strftime('%s','now')
+        """, (key, value))
+        conn.commit()
     finally:
         conn.close()
 
