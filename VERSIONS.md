@@ -2,6 +2,61 @@
 
 ---
 
+## v2.6.0 — 2026-03-31
+
+### Nihai Mimari — Backend Authority + Verification Layer + Generic TF Discovery
+
+**Mimari Kurallar (değiştirilemez, kodla zorunlu hale getirildi):**
+- Backend tek karar otoritesi — frontend display-only
+- Seesawing kesinlikle yasak — tek source of truth (`_BACKEND_ONLY_MODE = true` kalıcı)
+- Grace period kaldırıldı — fiyat olmadan trade açılmaz
+- Relay fiyatı authoritative değil — `_relay_prices` ayrı dict, trade kararını etkilemez
+- Verification fail → hard block, soft warning değil
+
+**Relay İzolasyonu (v2.5.3'ten fark):**
+- `price_relay` WS mesajı artık `_rtds_prices`'a yazmıyor → `_relay_prices`'a yazıyor
+- Trade kararları sadece `_rtds_prices` (backend poll loop) kullanıyor
+- `_relay_prices` = display-only supplemental; broadcast'te ayrı `relay_price` alanı
+
+**Reference State:**
+- `_reference_state: dict[str, dict]` — sym başına authoritative RTDS state
+- Alanlar: `symbol`, `last_price`, `last_update_ts`, `last_verified_ts`, `source`, `freshness`, `valid`, `invalid_reason`
+- Sadece `_rtds_poll_loop` yazar (source="poll"), relay yazmaz
+
+**Verification Hard Gate:**
+- `_ref_valid`: sym RTDS_SYMBOLS'ta → `_is_price_fresh()` → False ise BLOKE
+- `_market_valid`: `entry_service.is_data_fresh(key)` — CLOB verisi taze mi?
+- `_trade_allowed = _ref_valid AND _market_valid AND settings_configured`
+- Entry trigger: `and _trade_allowed` — üç koşuldan biri fail → trade yok
+- Log tag: `[VERIFICATION_GATE]`
+
+**Event State (broadcast'te her asset):**
+- `reference_valid`, `market_valid`, `trade_allowed`, `verification_status`, `invalid_reason`
+- `live_price_age_ms`, `live_price_verified`, `relay_price`
+- `event.up_asset_id`, `event.down_asset_id`, `event.market_status`
+
+**Generic Timeframe Parser (`parse_timeframe`):**
+- Eski: sadece 5M, 15M, 1H, 4H, 1D → varsayılan 5M
+- Yeni: regex tabanlı, 1M-7D arası tüm formatlar (7M, 30M, 2H, 3D, 7D, haftalık...)
+- Yanlış 5M fallback yok — bilinmeyen → None, _detect_tf wrapper → "5M"
+- TF_SECONDS genişletildi: 7M, 30M, 2H, 3H, 6H, 8H, 12H, 2D, 3D, 7D
+
+**Canonical Registry (scan.py):**
+- `up_asset_id`, `down_asset_id`: token listsinden açıkça ayıklandı
+- `market_status`: "open" / "closed" / "unknown"
+- `verification_state`: "unverified" başlar, simulation_tick "verified"/"stale" günceller
+
+**Frontend Trade Gate Badge:**
+- `trade_allowed=false` → `.eac-trade-gate` ⛔ badge gösterilir
+- Tooltip: "Trade bloke: {invalid_reason}"
+- Frontend karar vermez, sadece backend doğrulama sonucunu gösterir
+
+**Testler (49/49 PASSED):**
+- `tests/test_architecture.py` — 49 test, 6 test sınıfı
+- TF parser (20 test), _is_price_fresh (7), relay izolasyon (4), trade gate (7), canonical alanlar (4), frontend contract (5)
+
+---
+
 ## v2.5.3 — 2026-03-31
 
 ### Backend Authority Architecture + Verification Layer

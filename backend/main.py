@@ -185,23 +185,43 @@ async def simulation_tick():
                 if _EXEC_AVAILABLE and mp.get("up_ask", 0) > 0:
                     _entry_svc.record_price_update(key)
 
-                # ── STALE DATA HARD GATE ─────────────────────────────────────
-                # Fiyat DAHA ONCE geldi ama simdi stale ise ENTRY BLOKE.
-                # Hic gelmemisse (startup grace) → bloke etme, btc_delta=None fallback calisir.
-                # "Muhtemelen dogrudur" kabul edilmez — fiyat stale = gecersiz.
-                _price_ok = True  # varsayılan: açık
-                if sym in _rtds_prices_ts:  # en az bir kez relay/poll geldi mi?
-                    _price_ok = _is_price_fresh(sym)
-                    if not _price_ok:
-                        _age_s = round(time.time() - _rtds_prices_ts[sym], 1)
-                        logger.debug(f"[STALE_GATE] {key}: {sym} fiyati {_age_s}s eski — entry bloke")
+                # ── VERIFICATION HARD GATE ───────────────────────────────────
+                # GRACE PERIOD YOK. Sym RTDS_SYMBOLS'ta ise → fiyat zorunlu.
+                # Fiyat hiç gelmemişse (startup) veya stale ise → ENTRY BLOKE.
+                # "Muhtemelen doğrudur" / "startup grace" kabul edilmez.
+                # btc_delta kuralı aktif olmasa bile authoritative price olmadan trade yok.
+                _ref_valid = True  # varsayılan: RTDS feed'i olmayan coinler için
+                _ref_reason = ""
+                if sym in RTDS_SYMBOLS:  # Bu coin için canlı fiyat feed'i bekleniyor
+                    _ref_valid = _is_price_fresh(sym)
+                    if not _ref_valid:
+                        ts_known = _rtds_prices_ts.get(sym, 0.0)
+                        if ts_known == 0.0:
+                            _ref_reason = f"{sym} icin hic fiyat alinmadi (poll loop henuz calismadi?)"
+                        else:
+                            _age_s = round(time.time() - ts_known, 1)
+                            _ref_reason = f"{sym} fiyati {_age_s}s eski (>{RTDS_STALE_SEC}s = stale)"
+                        logger.debug(f"[VERIFICATION_GATE] {key}: {_ref_reason} — entry bloke")
 
-                # ── ENTRY TRIGGER ─────────────────────────────────────────────
-                # Tüm kurallar PASS + bot çalışıyor + ayarlar var + fiyat taze → entry tetikle
+                # ── MARKET VALIDITY CHECK ─────────────────────────────────────
+                # CLOB verisi taze mi? entry_service'in stale guard'ı ile tutarlı.
+                _market_valid = True
+                _market_reason = ""
+                if _EXEC_AVAILABLE:
+                    _market_valid = _entry_svc.is_data_fresh(key)
+                    if not _market_valid:
+                        _market_reason = f"{key} CLOB verisi stale (>{_entry_svc.STALE_DATA_SEC}s)"
+
+                # ── TRADE ALLOWED (combined verification result) ───────────────
+                # Her iki kaynak da taze olmali: reference (RTDS) + market (CLOB)
+                _trade_allowed = _ref_valid and _market_valid and settings_configured
+                _trade_block_reason = _ref_reason or _market_reason or ("settings_missing" if not settings_configured else "")
+
+                # ── ENTRY TRIGGER — HARD BLOCK ────────────────────────────────
+                # trade_allowed = False ise entry kesinlikle yapilmaz. Soft warning yok.
                 if (_EXEC_AVAILABLE
                         and app_state.get("bot_running")
-                        and settings_configured
-                        and _price_ok                     # VERIFICATION GATE: stale fiyatla islem yok
+                        and _trade_allowed                # HARD BLOCK: ref + market + settings
                         and not _entry_svc.is_event_locked(key)
                         and all(v == "pass" for v in rules.values())):
                     from backend.config import load_settings as _ls
@@ -226,10 +246,17 @@ async def simulation_tick():
                     ))
 
                 # Event verisi (Polymarket'ten)
+                # ── VERIFICATION STATE (canonical registry field update) ───────
+                # simulation_tick dogrulamayi gerceklestirdi — market_cache entry guncelle
+                _v_state = "verified" if (_ref_valid and _market_valid) else ("stale" if not _ref_valid else "market_stale")
+                real["verification_state"] = _v_state
+
                 real_event = {
                     "id":            real.get("conditionId") or real.get("slug", ""),
                     "slug":          real.get("slug", ""),
                     "conditionId":   real.get("conditionId", ""),
+                    "up_asset_id":   real.get("up_asset_id", real.get("tokens", [""])[0] if real.get("tokens") else ""),
+                    "down_asset_id": real.get("down_asset_id", real.get("tokens", ["",""])[1] if len(real.get("tokens", [])) > 1 else ""),
                     "title":         f"{info.get('name', sym)} Up or Down {tf}",
                     "question":      real.get("question", ""),
                     "subtitle":      datetime.fromtimestamp(int(real["end_ts"])).strftime("%b %d %H:%M") + " ET",
@@ -246,6 +273,7 @@ async def simulation_tick():
                     "open_reference": round(up_price, 4),
                     "end_ts":        int(real["end_ts"]),
                     "tokens":        real.get("tokens", []),
+                    "market_status": real.get("market_status", "open"),
                     "source":        "live",
                 }
 
@@ -253,6 +281,10 @@ async def simulation_tick():
                 price_ts = 0
                 if _EXEC_AVAILABLE:
                     price_ts = int(_entry_svc._last_price_update.get(key, 0) * 1000)  # ms
+
+                # ── REFERENCE STATE FRESHNESS ─────────────────────────────────
+                _ref_st = _reference_state.get(sym, {})
+                _lp_age_ms = int((now_ts_f - _rtds_prices_ts[sym]) * 1000) if sym in _rtds_prices_ts else -1
 
                 asset_states[key] = {
                     "symbol":       sym,
@@ -274,8 +306,19 @@ async def simulation_tick():
                     "slug":         current_slug,
                     "ptb":          get_ptb(key, current_slug=current_slug),
                     "live_price":   get_live_price(sym),
-                    "price_ts":     price_ts,    # Son CLOB WS fiyat zamanı (ms)
-                    "price_source": "backend",   # Daima backend — authoritative pricing
+                    "price_ts":     price_ts,
+                    "price_source": "backend",
+                    # ── EVENT STATE (verification fields) ───────────────────
+                    "reference_valid":     _ref_valid,
+                    "market_valid":        _market_valid,
+                    "trade_allowed":       _trade_allowed,
+                    "verification_status": _v_state,
+                    "invalid_reason":      _trade_block_reason,
+                    # ── LIVE PRICE METADATA (per-asset health) ───────────────
+                    "live_price_age_ms":   _lp_age_ms,
+                    "live_price_verified": _ref_valid,
+                    # ── RELAY PRICE (display-only, NOT authoritative) ────────
+                    "relay_price":         _relay_prices.get(sym, 0),
                 }
 
             app_state["assets"] = asset_states
@@ -363,25 +406,29 @@ def _build_broadcast_payload() -> str:
     for key, a in raw_assets.items():
         end_ts = a.get("event", {}).get("end_ts", 0)
         cd = round(max(0.0, end_ts - now_ts), 1) if end_ts else a.get("countdown", 0)
-        # ── VERİFİCATION METADATA ─────────────────────────────────────────────
-        # Her asset için fiyat tazeliği bilgisini broadcast'e ekle.
-        # Frontend bu bilgiyle stale/invalid badge gösterir — doğrulanmamış veri gibi gösterilemez.
-        sym = key.split("_")[0]
-        lp_ts = _rtds_prices_ts.get(sym, 0.0)
-        lp_age_ms = int((now_ts - lp_ts) * 1000) if lp_ts > 0 else -1
-        lp_verified = _is_price_fresh(sym)
-        assets_out[key] = {**a, "countdown": cd,
-                           "live_price_age_ms": lp_age_ms,
-                           "live_price_verified": lp_verified}
+        # Countdown broadcast anında hesaplanır — simulation_tick gecikmesinden bağımsız
+        # Verification fields simulation_tick'te hesaplanmış; sadece countdown güncelle
+        assets_out[key] = {**a, "countdown": cd}
     # Sistem geneli veri sağlığı — frontend data health badge için
-    fresh_syms = [s for s, ts in _rtds_prices_ts.items() if now_ts - ts <= RTDS_STALE_SEC]
-    stale_syms = [s for s, ts in _rtds_prices_ts.items() if now_ts - ts >  RTDS_STALE_SEC]
+    fresh_syms     = [s for s, ts in _rtds_prices_ts.items() if now_ts - ts <= RTDS_STALE_SEC]
+    stale_syms     = [s for s, ts in _rtds_prices_ts.items() if now_ts - ts >  RTDS_STALE_SEC]
+    no_data_syms   = [s for s in RTDS_SYMBOLS if s not in _rtds_prices_ts]
     data_health = {
         "rtds_fresh_count":  len(fresh_syms),
         "rtds_stale_syms":   stale_syms,
-        "rtds_no_data_syms": [],   # relay/poll hiç gelmedi
-        "verified":          len(stale_syms) == 0 and len(fresh_syms) > 0,
+        "rtds_no_data_syms": no_data_syms,  # hiç fiyat gelmeyen (startup veya poll fail)
+        "verified":          len(stale_syms) == 0 and len(fresh_syms) > 0 and len(no_data_syms) == 0,
         "stale_threshold_s": RTDS_STALE_SEC,
+        # Authoritative reference state özeti
+        "reference_state": {
+            sym: {
+                "last_price":     st.get("last_price", 0),
+                "source":         st.get("source", ""),
+                "valid":          st.get("valid", False),
+                "age_ms":         int((now_ts - st.get("last_update_ts", 0)) * 1000) if st.get("last_update_ts") else -1,
+            }
+            for sym, st in _reference_state.items()
+        },
     }
     fast = {
         "bot_running":       app_state["bot_running"],
@@ -835,31 +882,58 @@ _RTDS_HEADERS = {
     "Origin": "https://polymarket.com",
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
 }
-_rtds_prices: dict[str, float] = {}    # sym → canli fiyat (USD)
-_rtds_prices_ts: dict[str, float] = {} # sym → son guncelleme zamani (time.time())
+_rtds_prices: dict[str, float] = {}    # sym → canli fiyat (USD) — SADECE backend poll loop yazar
+_rtds_prices_ts: dict[str, float] = {} # sym → son poll guncelleme zamani (time.time())
 _rtds_running = False
 
+# ─── RELAY PRICES (browser → backend, display-only, NOT authoritative) ────────
+# Browser RTDS streaming fiyatlarini buraya yazar — trade kararlarinda KULLANILMAZ.
+# Sadece broadcast'te supplemental display bilgisi olarak yer alabilir.
+# Authoritative kaynak: _rtds_prices (sadece backend Python poll loop'tan)
+_relay_prices:    dict[str, float] = {}  # sym → browser-relayed fiyat (display-only)
+_relay_prices_ts: dict[str, float] = {}  # sym → relay guncelleme zamani
+
+# ─── REFERENCE STATE (authoritative RTDS per-symbol state) ────────────────────
+# Backend'in karar icin kullandigi fiyat state'i. Sadece _rtds_poll_loop gunceller.
+# Frontend'e broadcast edilir, trade gate bu state'e gore karar verir.
+_reference_state: dict[str, dict] = {}  # sym → ReferenceState dict
+
+def _make_reference_state(sym: str, val: float, source: str) -> dict:
+    """Authoritative fiyat state'i olustur."""
+    now = time.time()
+    valid = RTDS_PRICE_MIN <= val <= RTDS_PRICE_MAX
+    return {
+        "symbol":           sym,
+        "last_price":       val,
+        "last_update_ts":   now,
+        "last_verified_ts": now if valid else _reference_state.get(sym, {}).get("last_verified_ts", 0),
+        "source":           source,   # "poll" | "relay"
+        "freshness":        "fresh",  # set at creation; recomputed in verification check
+        "valid":            valid,
+        "invalid_reason":   "" if valid else f"price {val} out of range [{RTDS_PRICE_MIN}, {RTDS_PRICE_MAX}]",
+    }
+
 # ─── VERİFİCATION LAYER ───────────────────────────────────────────────────────
-# Fiyat dogrulama esikleri — bu degerler asan veri "stale/invalid" isaretlenir.
-RTDS_STALE_SEC  = 10.0   # Bu kadar saniye guncelleme gelmezse fiyat "stale"
-RTDS_PRICE_MIN  = 0.01   # Makul alt sinir (USD) — daha kucuk = invalid
+RTDS_STALE_SEC  = 10.0       # Bu kadar saniye guncelleme gelmezse fiyat "stale"
+RTDS_PRICE_MIN  = 0.01       # Makul alt sinir (USD)
 RTDS_PRICE_MAX  = 1_000_000.0  # Makul ust sinir (USD) — daha buyuk = invalid spike
 
 def get_live_price(sym: str) -> float:
-    """Belirli coin'in canli fiyatini don."""
+    """Belirli coin'in canli fiyatini don. Sadece authoritative poll prices."""
     return _rtds_prices.get(sym, 0.0)
 
 def _is_price_fresh(sym: str) -> bool:
-    """RTDS fiyati dogrulanmis ve taze mi? Hayir → trade acma, kullaniciya stale goster."""
+    """Authoritative RTDS fiyati taze ve gecerli mi?
+    False → trade ACILMAZ. Grace period YOK — once fiyat, sonra trade."""
     ts = _rtds_prices_ts.get(sym, 0.0)
     if ts == 0.0:
-        return False  # Hic guncelleme gelmedi
+        return False  # Hic guncelleme gelmedi (startup veya poll faili)
     age = time.time() - ts
     if age > RTDS_STALE_SEC:
-        return False  # Cok eski
+        return False  # Stale
     val = _rtds_prices.get(sym, 0.0)
     if val < RTDS_PRICE_MIN or val > RTDS_PRICE_MAX:
-        return False  # Aralik disi (spike / parse hatasi)
+        return False  # Aralik disi
     return True
 
 async def _rtds_poll_loop():
@@ -913,12 +987,16 @@ async def _rtds_poll_loop():
                             last = arr[-1]
                             v = last.get("value") or last.get("v") if isinstance(last, dict) else None
                             if v and float(v) > 0:
-                                _rtds_prices[sym] = round(float(v), 2)
-                                _rtds_prices_ts[sym] = time.time()
+                                _val = round(float(v), 2)
+                                _rtds_prices[sym]     = _val
+                                _rtds_prices_ts[sym]  = time.time()
+                                _reference_state[sym] = _make_reference_state(sym, _val, "poll")
                                 received += 1
                         elif payload.get("value") and sym:
-                            _rtds_prices[sym] = round(float(payload["value"]), 2)
-                            _rtds_prices_ts[sym] = time.time()
+                            _val = round(float(payload["value"]), 2)
+                            _rtds_prices[sym]     = _val
+                            _rtds_prices_ts[sym]  = time.time()
+                            _reference_state[sym] = _make_reference_state(sym, _val, "poll")
                             received += 1
                     except asyncio.TimeoutError:
                         continue
@@ -1004,14 +1082,14 @@ async def ws_endpoint(ws: WebSocket):
                 await ws.send_text(json.dumps({"type": "pong"}))
             elif msg.get("type") == "price_relay":
                 # Browser RTDS streaming → backend relay.
-                # Browser wss://ws-live-data.polymarket.com'dan type:update alır (~1Hz),
-                # backend Python'dan alamaz (Cloudflare bot tespiti).
-                # Browser burada fiyatı backend'e iletir → backend _rtds_prices günceller.
+                # ÖNEMLI: Bu veri authoritative DEĞIL — trade kararlarında kullanılmaz.
+                # Sadece _relay_prices'a yazılır (display-only supplemental data).
+                # Authoritative kaynak: _rtds_prices (sadece _rtds_poll_loop'tan).
                 sym = msg.get("sym", "")
                 val = msg.get("val", 0)
                 if sym and isinstance(val, (int, float)) and val > 0:
-                    _rtds_prices[sym] = round(float(val), 2)
-                    _rtds_prices_ts[sym] = time.time()  # freshness kaydı
+                    _relay_prices[sym]    = round(float(val), 2)
+                    _relay_prices_ts[sym] = time.time()
             elif msg.get("type") == "select_asset":
                 sym = msg.get("asset", "BTC")
                 if sym in ASSETS:

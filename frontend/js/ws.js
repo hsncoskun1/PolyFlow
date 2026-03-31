@@ -355,7 +355,7 @@ const _rtdsWsMap = {};  // rtdsSym → WebSocket
 
 // RTDS relay throttle: her sym için son relay zamanı (ms)
 const _rtdsRelayTs = {};
-const RTDS_RELAY_MIN_MS = 250; // backend'e max 4/sn relay — yeterli, spam yok
+const RTDS_RELAY_MIN_MS = 250; // backend'e max 4/sn relay
 
 function _handleRtdsMsg(data) {
   if (!data || data === 'PONG') return;
@@ -373,14 +373,16 @@ function _handleRtdsMsg(data) {
     }
     if (!val || val <= 0) return;
 
-    // BACKEND_ONLY_MODE: fiyatı state.assets'e yazma, backend'e relay et
-    // Backend _rtds_prices[sym] günceller → broadcast'te tüm clientlara gider
+    // ─── RELAY — DEBUG/COMPAT ONLY, NOT AUTHORITATIVE ───────────────────────
+    // Backend bu mesajı _relay_prices'a yazar — trade kararlarında KULLANILMAZ.
+    // Authoritative kaynak: backend _rtds_poll_loop (Python, ~500ms).
+    // state.assets ASLA buradan güncellenmez — backend broadcast'i beklenir.
     const now = Date.now();
     if (now - (_rtdsRelayTs[sym] || 0) >= RTDS_RELAY_MIN_MS) {
       _rtdsRelayTs[sym] = now;
       wsSend({ type: 'price_relay', sym, val });
     }
-    // Cache güncelle (debug modda veya seesawing olmayan okumalar için)
+    // Cache güncelle (sadece debug modda kullanılır)
     _wsLivePrices[sym] = { val, ts: now };
   } catch(e) {}
 }

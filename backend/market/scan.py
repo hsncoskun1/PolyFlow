@@ -78,25 +78,58 @@ def get_market_cache_ts() -> float:
     return _market_cache_update_ts
 
 
-def _detect_tf(slug: str, question: str) -> str:
-    """Detect timeframe from Polymarket slug/question."""
-    s = slug.lower()
-    q = question.lower()
-    if any(x in s for x in ("1d", "daily", "24h", "1-day")): return "1D"
-    if any(x in s for x in ("4h", "4hour", "4-hour")):         return "4H"
-    if any(x in s for x in ("1h", "1hour", "1-hour", "60min")): return "1H"
-    if any(x in s for x in ("15m", "15min", "15-min")):         return "15M"
-    if any(x in s for x in ("5m", "5min", "5-min")):            return "5M"
-    if "1 day" in q or "24 hour" in q:  return "1D"
-    if "4 hour" in q:                   return "4H"
-    if "1 hour" in q or "60 min" in q:  return "1H"
-    if "15 min" in q:                   return "15M"
-    return "5M"
+def parse_timeframe(text: str) -> str | None:
+    """
+    Generic timeframe parser — Polymarket slug veya question metninden TF çıkarır.
+    Örnek: "5m", "15min", "4-hour", "1 day", "7d", "30M", "2H", "3D" → canonical form.
+    Hiçbir şey eşleşmezse None döner (varsayılan uygulamak caller'ın sorumluluğu).
+    """
+    t = text.lower()
+    # ── Gün desenleri (önce uzun sayılar) ─────────────────────────────────────
+    for n in (7, 3, 2, 1):
+        patterns = [f"{n}d", f"{n}-day", f"{n}day", f"{n} day"]
+        if n == 1:
+            patterns += ["daily", "24h", "24-hour", "24 hour"]
+        if n == 7:
+            patterns += ["weekly", "7-day", "week"]
+        if any(p in t for p in patterns):
+            return f"{n}D"
+    # ── Saat desenleri ─────────────────────────────────────────────────────────
+    for n in (12, 8, 6, 4, 3, 2, 1):
+        patterns = [f"{n}h", f"{n}-hour", f"{n}hour", f"{n} hour"]
+        if n == 1:
+            patterns += ["1-hr", "hourly", "60min", "60m", "60-min", "60 min"]
+        if any(p in t for p in patterns):
+            return f"{n}H"
+    # ── Dakika desenleri ───────────────────────────────────────────────────────
+    for n in (30, 15, 10, 7, 5, 3, 2, 1):
+        patterns = [f"{n}m", f"{n}-min", f"{n}min", f"{n} min", f"{n}-minute", f"{n} minute"]
+        if n == 15:
+            patterns += ["fifteen", "fifteenmin"]
+        if n == 5:
+            patterns += ["fivemin", "five-min"]
+        if n == 30:
+            patterns += ["halfhour", "half-hour", "half hour"]
+        if any(p in t for p in patterns):
+            return f"{n}M"
+    return None
+
+
+def _detect_tf(slug: str, question: str = "") -> str:
+    """Detect timeframe from Polymarket slug/question. Falls back to '5M' if unknown."""
+    combined = f"{slug} {question}"
+    result = parse_timeframe(combined)
+    return result if result else "5M"
+
 
 # Timeframe → window seconds (bilinen TF'ler — yenileri otomatik eklenir)
-TF_SECONDS = {"5M": 300, "15M": 900, "1H": 3600, "4H": 14400, "1D": 86400,
-              "1M": 60, "2M": 120, "3M": 180, "10M": 600, "30M": 1800,
-              "2H": 7200, "3H": 10800, "6H": 21600, "8H": 28800, "12H": 43200}
+TF_SECONDS = {
+    "1M": 60,   "2M": 120,  "3M": 180,   "5M": 300,
+    "7M": 420,  "10M": 600, "15M": 900,  "30M": 1800,
+    "1H": 3600, "2H": 7200, "3H": 10800, "4H": 14400,
+    "6H": 21600, "8H": 28800, "12H": 43200,
+    "1D": 86400, "2D": 172800, "3D": 259200, "7D": 604800,
+}
 
 # Dinamik TF listesi — discovery_scan tarafindan otomatik guncellenir
 _discovered_timeframes: set[str] = {"5M", "15M", "1H", "4H", "1D"}  # baslangic
@@ -206,16 +239,33 @@ async def discover_slug_market(client: httpx.AsyncClient, slug: str) -> dict | N
             end_ts = datetime.fromisoformat(end_date.replace("Z", "+00:00")).timestamp()
         except Exception:
             end_ts = 0
+        # ── CANONICAL REGISTRY FIELDS ────────────────────────────────────────
+        # Polymarket token ID'leri: [0] = UP outcome, [1] = DOWN outcome
+        up_asset_id   = raw_tokens[0] if len(raw_tokens) > 0 else ""
+        down_asset_id = raw_tokens[1] if len(raw_tokens) > 1 else ""
+        now_sec = time.time()
+        market_status = "open" if end_ts > now_sec else ("closed" if end_ts > 0 else "unknown")
         return {
-            "conditionId": m.get("conditionId", ""),
-            "question":    m.get("question", ""),
-            "slug":        m.get("slug", "") or slug,
-            "tokens":      raw_tokens,
-            "up_price":    up_price,
-            "down_price":  down_price,
-            "end_ts":      end_ts,
-            "volume":      float(m.get("volume", 0) or 0),
-            "liquidity":   float(m.get("liquidity", 0) or 0),
+            # ── Core identity ────────────────────────────────────────────────
+            "conditionId":      m.get("conditionId", ""),
+            "question":         m.get("question", ""),
+            "slug":             m.get("slug", "") or slug,
+            # ── Canonical asset IDs ──────────────────────────────────────────
+            "tokens":           raw_tokens,          # legacy compat
+            "up_asset_id":      up_asset_id,
+            "down_asset_id":    down_asset_id,
+            # ── Prices ──────────────────────────────────────────────────────
+            "up_price":         up_price,
+            "down_price":       down_price,
+            # ── Timing ──────────────────────────────────────────────────────
+            "end_ts":           end_ts,
+            # ── Market status ────────────────────────────────────────────────
+            "market_status":    market_status,
+            # ── Verification state (set by backend verification layer) ───────
+            "verification_state": "unverified",       # upgraded to "verified" in simulation_tick
+            # ── Volume / liquidity ───────────────────────────────────────────
+            "volume":           float(m.get("volume", 0) or 0),
+            "liquidity":        float(m.get("liquidity", 0) or 0),
         }
     except Exception:
         return None
@@ -451,17 +501,23 @@ async def scan_gamma_markets():
             if isinstance(raw_tokens, str):
                 try: raw_tokens = json.loads(raw_tokens)
                 except Exception: raw_tokens = []
+            up_asset_id   = raw_tokens[0] if len(raw_tokens) > 0 else ""
+            down_asset_id = raw_tokens[1] if len(raw_tokens) > 1 else ""
             candidate = {
-                "conditionId":  m.get("conditionId", ""),
-                "question":     m.get("question", ""),
-                "slug":         slug,
-                "tokens":       raw_tokens,
-                "up_price":     up_price,
-                "down_price":   down_price,
-                "end_ts":       end_ts,
-                "timeframe":    tf,
-                "volume":       float(m.get("volume", 0) or 0),
-                "liquidity":    float(m.get("liquidity", 0) or 0),
+                "conditionId":      m.get("conditionId", ""),
+                "question":         m.get("question", ""),
+                "slug":             slug,
+                "tokens":           raw_tokens,
+                "up_asset_id":      up_asset_id,
+                "down_asset_id":    down_asset_id,
+                "up_price":         up_price,
+                "down_price":       down_price,
+                "end_ts":           end_ts,
+                "market_status":    "open",  # filtered to active above
+                "verification_state": "unverified",
+                "timeframe":        tf,
+                "volume":           float(m.get("volume", 0) or 0),
+                "liquidity":        float(m.get("liquidity", 0) or 0),
             }
             for sym, keywords in ASSET_SEARCH_TERMS.items():
                 if not any(kw in q for kw in keywords):
@@ -593,4 +649,4 @@ async def gamma_scan_loop():
                 await scan_slug_based()  # Then scan all known coins
             except Exception as e:
                 logger.error(f"gamma_scan_loop full-scan: {e}")
-        await asyncio.sleep(10)
+        await asyncio.sleep(5)

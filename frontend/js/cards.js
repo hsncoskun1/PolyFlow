@@ -34,12 +34,13 @@ function updateCardsInPlace(keys) {
     const _cv = {
       p: a.price, cd: Math.floor(cd), uA: mp.up_ask, dA: mp.down_ask,
       lp: a.live_price, r: rulesStr,
-      ptb: a.ptb || 0,               // PTB değişince güncelle
+      ptb: a.ptb || 0,
+      ta: a.trade_allowed,           // trade_allowed değişince güncelle
     };
     if (_pv && _pv.p === _cv.p && _pv.cd === _cv.cd &&
         _pv.uA === _cv.uA && _pv.dA === _cv.dA &&
         _pv.lp === _cv.lp && _pv.r === _cv.r &&
-        _pv.ptb === _cv.ptb) {
+        _pv.ptb === _cv.ptb && _pv.ta === _cv.ta) {
       return; // hiçbir şey değişmedi, bu kart için geç
     }
     _prevCardVals[key] = _cv;
@@ -104,6 +105,20 @@ function updateCardsInPlace(keys) {
       if (livePriceEl) livePriceEl.style.display = 'none';
       if (priceSepEl)  priceSepEl.style.display  = 'none';
       if (deltaEl)     deltaEl.style.display      = 'none';
+    }
+
+    // ── TRADE ALLOWED BADGE ───────────────────────────────────────────────────
+    // Backend verification gate sonucu — false ise trade kesinlikle açılmaz.
+    // Frontend sadece gösterir, karar vermez.
+    const tradeGateEl = card.querySelector('.eac-trade-gate');
+    if (tradeGateEl) {
+      const allowed = a.trade_allowed !== false;  // undefined = eski backend compat
+      tradeGateEl.style.display = allowed ? 'none' : '';
+      if (!allowed) {
+        const reason = a.invalid_reason || a.verification_status || 'verification failed';
+        tradeGateEl.title = `Trade bloke: ${reason}`;
+        tradeGateEl.textContent = '⛔';
+      }
     }
 
     // Price diff for rule calculations
@@ -410,6 +425,7 @@ function renderEventCard(key) {
           ${liveBadge}
           ${hasPos ? '<span class="badge-pos">●</span>' : ''}
           ${(allPass && state.botRunning && pinned) ? '<span class="badge-ready">AL</span>' : ''}
+          <span class="eac-trade-gate" style="display:none" title=""></span>
         </div>
         <div class="eac-price-row">
           <span class="eac-ptb-label">PTB</span>
