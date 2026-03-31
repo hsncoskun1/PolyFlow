@@ -2475,6 +2475,7 @@ body.modal-open { overflow: hidden; }
 .eac-ptb-val     { color: var(--accent-yellow); font-weight: 600; }
 .eac-anlık-label { color: var(--text-muted); font-weight: 700; font-size: 9px; text-transform: uppercase; }
 .eac-live-price  { color: #fff; font-weight: 700; font-size: 11px; }
+.eac-live-price.stale { color: var(--text-muted); opacity: 0.5; text-decoration: line-through; }
 .eac-price-sep   { color: var(--border-primary); font-size: 8px; }
 .eac-inline-delta { font-weight: 700; font-size: 10px; font-family: var(--font-mono); }
 .eac-inline-delta.pos { color: var(--accent-green); }
@@ -3015,6 +3016,17 @@ body.modal-open { overflow: hidden; }
   font-size: 10px; color: var(--accent-purple); font-weight: 700;
   min-width: 16px; text-align: center;
 }
+/* Spread disable toggle */
+.as-spread-toggle {
+  padding: 2px 6px; border-radius: 4px; font-size: 9px; font-weight: 700;
+  font-family: var(--font-mono); cursor: pointer; border: 1px solid;
+  transition: background .15s, color .15s; white-space: nowrap;
+}
+.as-spread-toggle.on  { background: rgba(0,212,170,.15); color: var(--accent-green); border-color: rgba(0,212,170,.4); }
+.as-spread-toggle.on:hover  { background: rgba(0,212,170,.28); }
+.as-spread-toggle.off { background: rgba(255,85,85,.15);  color: var(--accent-red);   border-color: rgba(255,85,85,.4); }
+.as-spread-toggle.off:hover { background: rgba(255,85,85,.28); }
+.as-input:disabled { opacity: 0.35; cursor: not-allowed; }
 .as-row .as-input {
   width: 68px; padding: 4px 7px;
   font-size: 12px; text-align: right;
@@ -3156,6 +3168,14 @@ body.modal-open { overflow: hidden; }
 }
 .cf-btn-confirm:hover { filter: brightness(1.15); }
 .cf-btn-confirm.trade { background: linear-gradient(135deg, #7b61ff, #00d4aa); }
+
+/* ── Bot Start Modal ── */
+.bot-start-popup { min-width: 280px; max-width: 360px; }
+.bot-start-body  { margin: 12px 0; }
+.bot-start-row   { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.bot-start-label { font-size: 12px; color: var(--text-secondary); font-weight: 600; }
+.bot-start-ctrl  { display: flex; align-items: center; gap: 5px; }
+.bot-start-hint  { font-size: 10px; color: var(--text-muted); line-height: 1.5; }
 
 /* ── Drag-and-drop styles ── */
 .eac[draggable="true"] { cursor: grab; }

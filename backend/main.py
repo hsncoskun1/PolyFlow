@@ -10,6 +10,7 @@ import logging
 import math
 import re
 import random
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -80,16 +81,25 @@ from backend.strategy.engine import evaluate_rules as _evaluate_rules
 _NO_SETTINGS = {"time":"no_settings","price":"no_settings","btc_move":"no_settings",
                 "slippage":"no_settings","event_limit":"no_settings","max_positions":"no_settings"}
 
-def _make_asset_rules(sym: str, cd: int = 150, mp: dict = None, key: str = None) -> dict:
+def _make_asset_rules(sym: str, cd: int = 150, mp: dict = None, key: str = None,
+                      _cached_global: dict = None, _cached_events: dict = None) -> dict:
     """Kural durumlarini hesapla — moduler engine'e yonlendirir.
-    ONEMLI: key icin event ayari YOKSA tum kurallar 'no_settings' doner → islem acilmaz."""
+    ONEMLI: key icin event ayari YOKSA tum kurallar 'no_settings' doner → islem acilmaz.
+    _cached_global: onceden yuklenmis global ayarlar (dosya okuma atlama)
+    _cached_events: onceden yuklenmis tum event ayarlari {key: dict} (DB okuma atlama)."""
     if mp is None:
         mp = _asset_market.get(key or sym, {"up_ask": 0.5, "slippage_pct": 1.2})
-    from backend.config import load_settings
-    from backend.storage.db import get_event_settings
-    global_settings = load_settings()
+    if _cached_global is None:
+        from backend.config import load_settings
+        global_settings = load_settings()
+    else:
+        global_settings = _cached_global
     if key:
-        event_s = get_event_settings(key)
+        if _cached_events is not None:
+            event_s = _cached_events.get(key)
+        else:
+            from backend.storage.db import get_event_settings
+            event_s = get_event_settings(key)
         if event_s:
             merged = {**global_settings, **event_s}
         else:
@@ -114,7 +124,16 @@ async def simulation_tick():
             # Pozisyon lookuplarını ön hesapla — her event için linear scan yapmamak için
             open_sym_set = {p.get("asset") for p in app_state["positions"]}
 
-            for key, real in list(get_market_cache().items()):
+            # Tüm ayarları bir kez oku — her event için tekrar DB/dosya okuma yapma
+            from backend.config import load_settings as _ls_tick
+            from backend.storage.db import get_all_event_settings as _get_all_es
+            _tick_global_settings = _ls_tick()
+            _tick_event_settings  = _get_all_es()  # {key: settings_dict} — tek SQL sorgusu
+
+            for i, (key, real) in enumerate(list(get_market_cache().items())):
+                # Her 4 event'te bir event loop'a yield — broadcast_loop ve CLOB WS'in çalışmasına izin ver
+                if i > 0 and i % 4 == 0:
+                    await asyncio.sleep(0)
                 sym = key.split("_")[0]
                 info = ASSETS.get(sym) or COIN_REGISTRY.get(sym)
                 if not info:
@@ -148,26 +167,41 @@ async def simulation_tick():
                     }
 
                 # BTC delta: live kripto fiyati - PTB (USD cinsinden)
-                # MoveRule icin referans botla ayni hesap
-                ptb_val = get_ptb(key)
+                # current_slug ile stale PTB koruması — slug değişince 0 döner
+                current_slug = real.get("slug", "")
+                ptb_val = get_ptb(key, current_slug=current_slug)
                 live_val = _rtds_prices.get(sym, 0)
                 if ptb_val > 0 and live_val > 0:
                     mp["btc_delta"] = round(live_val - ptb_val, 2)
                 else:
                     mp.pop("btc_delta", None)
 
-                rules = _make_asset_rules(sym, cd, mp, key=key)
+                rules = _make_asset_rules(sym, cd, mp, key=key,
+                                          _cached_global=_tick_global_settings,
+                                          _cached_events=_tick_event_settings)
                 settings_configured = rules.get("time") != "no_settings"
 
                 # Stale data guard — market fiyatı her tick'te güncel işaretle
                 if _EXEC_AVAILABLE and mp.get("up_ask", 0) > 0:
                     _entry_svc.record_price_update(key)
 
+                # ── STALE DATA HARD GATE ─────────────────────────────────────
+                # Fiyat DAHA ONCE geldi ama simdi stale ise ENTRY BLOKE.
+                # Hic gelmemisse (startup grace) → bloke etme, btc_delta=None fallback calisir.
+                # "Muhtemelen dogrudur" kabul edilmez — fiyat stale = gecersiz.
+                _price_ok = True  # varsayılan: açık
+                if sym in _rtds_prices_ts:  # en az bir kez relay/poll geldi mi?
+                    _price_ok = _is_price_fresh(sym)
+                    if not _price_ok:
+                        _age_s = round(time.time() - _rtds_prices_ts[sym], 1)
+                        logger.debug(f"[STALE_GATE] {key}: {sym} fiyati {_age_s}s eski — entry bloke")
+
                 # ── ENTRY TRIGGER ─────────────────────────────────────────────
-                # Tüm kurallar PASS + bot çalışıyor + ayarlar var → entry tetikle
+                # Tüm kurallar PASS + bot çalışıyor + ayarlar var + fiyat taze → entry tetikle
                 if (_EXEC_AVAILABLE
                         and app_state.get("bot_running")
                         and settings_configured
+                        and _price_ok                     # VERIFICATION GATE: stale fiyatla islem yok
                         and not _entry_svc.is_event_locked(key)
                         and all(v == "pass" for v in rules.values())):
                     from backend.config import load_settings as _ls
@@ -176,9 +210,16 @@ async def simulation_tick():
                     merged_s = {**_ls(), **ev_s}
                     trade_count = _event_trade_counts.get(key, 0)
                     open_count  = _pos_tracker.get_active_count()
-                    # max_total_trades kontrolü (0 = sınırsız)
-                    max_total = int(merged_s.get("max_total_trades", 0))
+                    # max_total_trades: bot başlatılırken app_state'e set edilir (0 = sonsuz)
+                    # app_state değeri öncelikli; yoksa merged_s'ten oku
+                    max_total = int(app_state.get("max_total_trades",
+                                    merged_s.get("max_total_trades", 0)))
                     if max_total > 0 and sum(_event_trade_counts.values()) >= max_total:
+                        # Max işlem sayısına ulaşıldı — botu otomatik durdur
+                        if app_state.get("bot_running"):
+                            app_state["bot_running"] = False
+                            app_state["strategy_status"] = "IDLE"
+                            addlog("info", f"Bot otomatik durdu — {max_total} işlem tamamlandı")
                         continue
                     asyncio.create_task(entry_service_task(
                         key, sym, mp, rules, merged_s, real, open_count, trade_count
@@ -230,8 +271,8 @@ async def simulation_tick():
                     "has_position": sym in open_sym_set,
                     "settings_configured": settings_configured,
                     "phase":        _asset_phases.get(sym, "entry"),
-                    "slug":         real.get("slug", ""),
-                    "ptb":          get_ptb(key),
+                    "slug":         current_slug,
+                    "ptb":          get_ptb(key, current_slug=current_slug),
                     "live_price":   get_live_price(sym),
                     "price_ts":     price_ts,    # Son CLOB WS fiyat zamanı (ms)
                     "price_source": "backend",   # Daima backend — authoritative pricing
@@ -312,17 +353,42 @@ async def entry_service_task(key, sym, mp, rules, settings, market_info, open_co
 
 
 # ─── BROADCAST ────────────────────────────────────────────────────────────────
-_last_broadcast_hash: str = ""
-_last_force_broadcast_ts: float = 0.0
 
 def _build_broadcast_payload() -> str:
     """Sadece hızlı değişen alanları gönder — events alanı assets.event ile aynı, duplicate."""
+    now_ts = time.time()
+    # Countdown'ı broadcast anında hesapla — simulation_tick gecikmesinden bağımsız
+    raw_assets = app_state.get("assets", {})
+    assets_out = {}
+    for key, a in raw_assets.items():
+        end_ts = a.get("event", {}).get("end_ts", 0)
+        cd = round(max(0.0, end_ts - now_ts), 1) if end_ts else a.get("countdown", 0)
+        # ── VERİFİCATION METADATA ─────────────────────────────────────────────
+        # Her asset için fiyat tazeliği bilgisini broadcast'e ekle.
+        # Frontend bu bilgiyle stale/invalid badge gösterir — doğrulanmamış veri gibi gösterilemez.
+        sym = key.split("_")[0]
+        lp_ts = _rtds_prices_ts.get(sym, 0.0)
+        lp_age_ms = int((now_ts - lp_ts) * 1000) if lp_ts > 0 else -1
+        lp_verified = _is_price_fresh(sym)
+        assets_out[key] = {**a, "countdown": cd,
+                           "live_price_age_ms": lp_age_ms,
+                           "live_price_verified": lp_verified}
+    # Sistem geneli veri sağlığı — frontend data health badge için
+    fresh_syms = [s for s, ts in _rtds_prices_ts.items() if now_ts - ts <= RTDS_STALE_SEC]
+    stale_syms = [s for s, ts in _rtds_prices_ts.items() if now_ts - ts >  RTDS_STALE_SEC]
+    data_health = {
+        "rtds_fresh_count":  len(fresh_syms),
+        "rtds_stale_syms":   stale_syms,
+        "rtds_no_data_syms": [],   # relay/poll hiç gelmedi
+        "verified":          len(stale_syms) == 0 and len(fresh_syms) > 0,
+        "stale_threshold_s": RTDS_STALE_SEC,
+    }
     fast = {
         "bot_running":       app_state["bot_running"],
         "mode":              app_state.get("mode", "LIVE"),
         "balance":           app_state.get("balance", 0.0),
         "session_pnl":       app_state.get("session_pnl", 0.0),
-        "assets":            app_state.get("assets", {}),
+        "assets":            assets_out,
         "pinned":            app_state.get("pinned", []),
         "positions":         app_state.get("positions", []),
         "trade_history":     app_state.get("trade_history", []),
@@ -331,12 +397,14 @@ def _build_broadcast_payload() -> str:
         "safe_mode":         app_state.get("safe_mode", False),
         "ws_client_count":   app_state.get("ws_client_count", 0),
         "asset_settings":    app_state.get("asset_settings", {}),
+        "max_total_trades":  app_state.get("max_total_trades", 0),
+        "data_health":       data_health,
+        "_tick":             int(now_ts * 1000),
     }
     return json.dumps({"type": "state_update", "data": fast})
 
 
 async def broadcast_state(force: bool = False):
-    global _last_broadcast_hash, _last_force_broadcast_ts
     if not ws_clients:
         return
     try:
@@ -345,16 +413,7 @@ async def broadcast_state(force: bool = False):
         logger.error(f"serialize error: {e}")
         return
 
-    # Change detection — sadece data değiştiyse gönder
-    # Ama en fazla 200ms'de bir force broadcast yap (countdown/delta güncelleme garantisi)
-    if not force:
-        h = str(hash(payload))
-        now = time.time()
-        if h == _last_broadcast_hash and (now - _last_force_broadcast_ts) < 0.2:
-            return
-        _last_broadcast_hash = h
-        _last_force_broadcast_ts = now
-
+    # _tick alanı her çağrıda farklı olduğundan hash check gereksiz — her 50ms'de direkt gönder
     dead = set()
     for client in ws_clients:
         try:
@@ -366,15 +425,50 @@ async def broadcast_state(force: bool = False):
 
 
 async def broadcast_loop():
-    while True:
+    """Asyncio task — arka plan thread tarafından tetiklenir; kendi içinde sleep yok."""
+    # Bu fonksiyon artık doğrudan çağrılmıyor — _broadcast_timer_thread tetikliyor.
+    # Eski uyumluluk için boş bırakıldı; lifespan'de task olarak başlatılmaz.
+    pass
+
+
+# broadcast debug — app_state aracılığıyla routes.py'den erişilebilir
+app_state["_dbg_thread_count"] = 0
+app_state["_dbg_loop_count"]   = 0
+
+async def _send_prebuilt(payload: str) -> None:
+    """Önceden hazırlanmış payload'ı tüm WS istemcilerine gönder (hızlı — sadece network I/O)."""
+    app_state["_dbg_loop_count"] = app_state.get("_dbg_loop_count", 0) + 1
+    dead = set()
+    for client in ws_clients:
         try:
-            # User WS bağlantı durumunu güncelle
-            if _EXEC_AVAILABLE:
+            await client.send_text(payload)
+        except Exception:
+            dead.add(client)
+    ws_clients.difference_update(dead)
+
+
+def _broadcast_timer_thread(loop: asyncio.AbstractEventLoop) -> None:
+    """Gerçek OS thread'i — asyncio scheduler'dan bağımsız, 50ms'de bir broadcast tetikler.
+    JSON serializasyonu burada yapılır (event loop'u bloklamaz), sadece send event loop'ta çalışır."""
+    INTERVAL = 0.05  # 50ms
+    while True:
+        time.sleep(INTERVAL)
+        if not ws_clients:
+            continue
+        # User WS durumunu thread-safe güncelle
+        if _EXEC_AVAILABLE:
+            try:
                 app_state["connection_status"]["user_ws"] = _user_ws.is_connected()
-            await broadcast_state()
-        except Exception as e:
-            logger.error(f"broadcast_loop: {e}")
-        await asyncio.sleep(0.05)  # 50ms — en hizli guncelleme
+            except Exception:
+                pass
+        # JSON serializasyonu thread'de yap — event loop'u bloklamaz
+        try:
+            payload = _build_broadcast_payload()
+        except Exception:
+            continue
+        # Sadece network send'i event loop'a yolla — çok hızlı, <1ms
+        app_state["_dbg_thread_count"] = app_state.get("_dbg_thread_count", 0) + 1
+        asyncio.run_coroutine_threadsafe(_send_prebuilt(payload), loop)
 
 
 # GAMMA MARKET SCAN: _build_search_terms, _market_cache, _detect_tf, TF_SECONDS,
@@ -546,54 +640,53 @@ async def clob_midpoint_poll():
     /midpoint → (best_bid + best_ask) / 2 — Stabil, event sonu spike olmaz.
     NOT: /price?side=buy event sonunda 0.01↔0.75 arasin da seesiyor — kullanilmiyor."""
     CLOB_BASE = "https://clob.polymarket.com"
-    while True:
-        try:
-            pinned_set = set(app_state.get("pinned", []))
-            keys_ordered = list(pinned_set) + [k for k in get_market_cache() if k not in pinned_set]
-            for key in keys_ordered[:20]:
-                info = get_market_cache().get(key)
-                if not info:
-                    continue
+    # Tek bir kalıcı istemci — her market için SSL handshake overhead'i kaldırır
+    async with httpx.AsyncClient(timeout=4.0) as c:
+        while True:
+            try:
+                pinned_set = set(app_state.get("pinned", []))
+                keys_ordered = list(pinned_set) + [k for k in get_market_cache() if k not in pinned_set]
+                for key in keys_ordered[:20]:
+                    info = get_market_cache().get(key)
+                    if not info:
+                        continue
 
-                tokens = info.get("tokens", [])
-                if len(tokens) < 2:
-                    continue
-                up_tid, dn_tid = tokens[0], tokens[1]
-                try:
-                    async with httpx.AsyncClient(timeout=4.0) as c:
-                        # Sadece midpoint — 2 request/market
+                    tokens = info.get("tokens", [])
+                    if len(tokens) < 2:
+                        continue
+                    up_tid, dn_tid = tokens[0], tokens[1]
+                    try:
+                        # Sadece midpoint — 2 request/market, kalıcı bağlantı üzerinden
                         r_up_mid  = await c.get(f"{CLOB_BASE}/midpoint", params={"token_id": up_tid})
                         r_dn_mid  = await c.get(f"{CLOB_BASE}/midpoint", params={"token_id": dn_tid})
 
-                    up_mid_val = float(r_up_mid.json().get("mid", 0)) if r_up_mid.status_code == 200 else 0
-                    dn_mid_val = float(r_dn_mid.json().get("mid", 0)) if r_dn_mid.status_code == 200 else 0
+                        up_mid_val = float(r_up_mid.json().get("mid", 0)) if r_up_mid.status_code == 200 else 0
+                        dn_mid_val = float(r_dn_mid.json().get("mid", 0)) if r_dn_mid.status_code == 200 else 0
 
-                    # Mantikli aralik: 0.02-0.98 (daha genis — gercek yaklasin-cozum degerlerine izin ver)
-                    def _mid_valid(v): return 0.02 <= v <= 0.98
+                        def _mid_valid(v): return 0.02 <= v <= 0.98
 
-                    if _mid_valid(up_mid_val) and _mid_valid(dn_mid_val):
-                        if key not in _asset_market:
-                            _asset_market[key] = {}
-                        # EMA yumusatma: ani ziplama onle (alpha=0.5 → yuzde 50 eski, 50 yeni)
-                        old_up  = _asset_market[key].get("up_mid", 0)
-                        old_dn  = _asset_market[key].get("down_mid", 0)
-                        alpha   = 0.5
-                        sm_up   = round(old_up * (1-alpha) + up_mid_val * alpha, 4) if old_up > 0.01 else round(up_mid_val, 4)
-                        sm_dn   = round(old_dn * (1-alpha) + dn_mid_val * alpha, 4) if old_dn > 0.01 else round(dn_mid_val, 4)
+                        if _mid_valid(up_mid_val) and _mid_valid(dn_mid_val):
+                            if key not in _asset_market:
+                                _asset_market[key] = {}
+                            old_up  = _asset_market[key].get("up_mid", 0)
+                            old_dn  = _asset_market[key].get("down_mid", 0)
+                            alpha   = 0.5
+                            sm_up   = round(old_up * (1-alpha) + up_mid_val * alpha, 4) if old_up > 0.01 else round(up_mid_val, 4)
+                            sm_dn   = round(old_dn * (1-alpha) + dn_mid_val * alpha, 4) if old_dn > 0.01 else round(dn_mid_val, 4)
 
-                        _asset_market[key]["up_ask"]    = sm_up
-                        _asset_market[key]["up_mid"]    = sm_up
-                        _asset_market[key]["down_ask"]  = sm_dn
-                        _asset_market[key]["down_mid"]  = sm_dn
-                        _asset_market[key]["up_bid"]    = round(sm_up - 0.005, 4)
-                        _asset_market[key]["down_bid"]  = round(sm_dn - 0.005, 4)
-                        _asset_market[key]["slippage_pct"] = round(max(0, (sm_up + sm_dn - 1) * 100), 2)
-                except Exception:
-                    pass
-                await asyncio.sleep(0.15)
-        except Exception as e:
-            logger.debug(f"midpoint poll hata: {e}")
-        await asyncio.sleep(3)
+                            _asset_market[key]["up_ask"]    = sm_up
+                            _asset_market[key]["up_mid"]    = sm_up
+                            _asset_market[key]["down_ask"]  = sm_dn
+                            _asset_market[key]["down_mid"]  = sm_dn
+                            _asset_market[key]["up_bid"]    = round(sm_up - 0.005, 4)
+                            _asset_market[key]["down_bid"]  = round(sm_dn - 0.005, 4)
+                            _asset_market[key]["slippage_pct"] = round(max(0, (sm_up + sm_dn - 1) * 100), 2)
+                    except Exception:
+                        pass
+                    await asyncio.sleep(0.5)  # 0.15→0.5sn: event loop yükü azaltır
+            except Exception as e:
+                logger.debug(f"midpoint poll hata: {e}")
+            await asyncio.sleep(3)
 
 
 # ─── LIFESPAN ─────────────────────────────────────────────────────────────────
@@ -688,7 +781,10 @@ async def lifespan(app):
 
     tasks = []
     try:
-        tasks.append(asyncio.create_task(broadcast_loop()))
+        # Broadcast: asyncio task yerine OS thread — 50ms zamanlama garantisi
+        _loop = asyncio.get_event_loop()
+        _bt = threading.Thread(target=_broadcast_timer_thread, args=(_loop,), daemon=True)
+        _bt.start()
         tasks.append(asyncio.create_task(simulation_tick()))
         tasks.append(asyncio.create_task(gamma_scan_loop()))
         tasks.append(asyncio.create_task(clob_ws_connect()))
@@ -730,90 +826,121 @@ async def lifespan(app):
 RELAYER_HEALTH_URL = "https://clob.polymarket.com"
 
 # ─── RTDS WEBSOCKET: Canli Coin Fiyatlari ────────────────────────────────────
+# Not: wss://ws-live-data.polymarket.com sadece tarihsel batch gonderir (streaming yok).
+# Dis kaynaklar (Binance, Kraken) bu agda SSL hatasi veriyor.
+# Cozum: Tek RTDS baglantisinda 7 coin subscribe → batch al → kapat → hemen tekrar.
+# Boylece ~500ms guncelleme hizi elde edilir (baglanti overhead = ~470ms).
 RTDS_URL = "wss://ws-live-data.polymarket.com"
+_RTDS_HEADERS = {
+    "Origin": "https://polymarket.com",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
+}
 _rtds_prices: dict[str, float] = {}    # sym → canli fiyat (USD)
+_rtds_prices_ts: dict[str, float] = {} # sym → son guncelleme zamani (time.time())
 _rtds_running = False
+
+# ─── VERİFİCATION LAYER ───────────────────────────────────────────────────────
+# Fiyat dogrulama esikleri — bu degerler asan veri "stale/invalid" isaretlenir.
+RTDS_STALE_SEC  = 10.0   # Bu kadar saniye guncelleme gelmezse fiyat "stale"
+RTDS_PRICE_MIN  = 0.01   # Makul alt sinir (USD) — daha kucuk = invalid
+RTDS_PRICE_MAX  = 1_000_000.0  # Makul ust sinir (USD) — daha buyuk = invalid spike
 
 def get_live_price(sym: str) -> float:
     """Belirli coin'in canli fiyatini don."""
     return _rtds_prices.get(sym, 0.0)
 
-async def _rtds_ping(ws):
-    """RTDS WebSocket keepalive."""
-    while True:
-        try:
-            await asyncio.sleep(10)
-            await ws.send("PING")
-        except Exception:
-            break
+def _is_price_fresh(sym: str) -> bool:
+    """RTDS fiyati dogrulanmis ve taze mi? Hayir → trade acma, kullaniciya stale goster."""
+    ts = _rtds_prices_ts.get(sym, 0.0)
+    if ts == 0.0:
+        return False  # Hic guncelleme gelmedi
+    age = time.time() - ts
+    if age > RTDS_STALE_SEC:
+        return False  # Cok eski
+    val = _rtds_prices.get(sym, 0.0)
+    if val < RTDS_PRICE_MIN or val > RTDS_PRICE_MAX:
+        return False  # Aralik disi (spike / parse hatasi)
+    return True
 
-async def _rtds_coin_loop(sym: str, rtds_symbol: str):
-    """Tek bir coin icin RTDS WebSocket baglantisi. Her coin ayri baglanti."""
+async def _rtds_poll_loop():
+    """Tek RTDS baglantisinda tum coinleri subscribe — batch al — hemen tekrar.
+    ~500ms/cycle ile tum coinleri gunceller (agdaki SSL kisitlari nedeniyle Binance WS kullanilamiyor)."""
     global _rtds_prices
-    sub_msg = json.dumps({
-        "action": "subscribe",
-        "subscriptions": [{
-            "topic": "crypto_prices",
-            "type": "*",
-            "filters": json.dumps({"symbol": rtds_symbol})
-        }]
-    })
-    retry = 1
+    # Her coin icin subscribe mesaji hazirla
+    _sub_msgs = []
+    _sym_lookup: dict[str, str] = {}  # rtds_symbol → "BTC" etc.
+    for sym, rtds_sym in RTDS_SYMBOLS.items():
+        _sub_msgs.append(json.dumps({
+            "action": "subscribe",
+            "subscriptions": [{
+                "topic": "crypto_prices",
+                "type": "*",
+                "filters": json.dumps({"symbol": rtds_sym})
+            }]
+        }))
+        _sym_lookup[rtds_sym] = sym
+
+    fail_count = 0
     while _rtds_running:
         try:
             async with websockets.connect(
-                RTDS_URL, ping_interval=20, ping_timeout=20, close_timeout=5
+                RTDS_URL, ping_interval=None, close_timeout=3,
+                additional_headers=_RTDS_HEADERS
             ) as ws:
-                await ws.send(sub_msg)
-                addlog("info", f"RTDS {sym} baglandi ({rtds_symbol})")
-                retry = 1
-                ping_task = asyncio.create_task(_rtds_ping(ws))
-                try:
-                    while _rtds_running:
-                        try:
-                            raw = await asyncio.wait_for(ws.recv(), timeout=30.0)
-                            if not raw or raw in ("PONG", "pong"):
-                                continue
-                            if isinstance(raw, bytes):
-                                raw = raw.decode("utf-8", errors="ignore")
-                            if not raw.strip():
-                                continue
-                            try:
-                                data = json.loads(raw)
-                            except json.JSONDecodeError:
-                                continue
-                            payload = data.get("payload", {})
-                            if isinstance(payload, dict):
-                                val = payload.get("value", 0)
-                                if val and float(val) > 0:
-                                    _rtds_prices[sym] = round(float(val), 2)
-                                arr = payload.get("data", [])
-                                if arr and isinstance(arr, list):
-                                    last = arr[-1]
-                                    if isinstance(last, dict) and last.get("value"):
-                                        _rtds_prices[sym] = round(float(last["value"]), 2)
-                        except asyncio.TimeoutError:
+                # Tum coinleri tek anda subscribe et
+                for msg in _sub_msgs:
+                    await ws.send(msg)
+                fail_count = 0
+                # Her batch: 1 bos + 1 veri mesaji (coin basina)
+                received = 0
+                deadline = time.time() + 1.5  # max 1.5s bekle
+                while received < len(RTDS_SYMBOLS) and time.time() < deadline:
+                    try:
+                        raw = await asyncio.wait_for(ws.recv(), timeout=0.5)
+                        if isinstance(raw, bytes):
+                            raw = raw.decode("utf-8", errors="ignore")
+                        if not raw or not raw.strip():
                             continue
-                        except websockets.ConnectionClosed:
-                            addlog("warn", f"RTDS {sym} baglanti koptu")
-                            break
-                        except Exception:
-                            break
-                finally:
-                    ping_task.cancel()
+                        data = json.loads(raw)
+                        payload = data.get("payload", {})
+                        if not isinstance(payload, dict):
+                            continue
+                        # payload.symbol = hangi coin
+                        rtds_sym = payload.get("symbol", "")
+                        sym = _sym_lookup.get(rtds_sym)
+                        arr = payload.get("data", [])
+                        if arr and sym:
+                            last = arr[-1]
+                            v = last.get("value") or last.get("v") if isinstance(last, dict) else None
+                            if v and float(v) > 0:
+                                _rtds_prices[sym] = round(float(v), 2)
+                                _rtds_prices_ts[sym] = time.time()
+                                received += 1
+                        elif payload.get("value") and sym:
+                            _rtds_prices[sym] = round(float(payload["value"]), 2)
+                            _rtds_prices_ts[sym] = time.time()
+                            received += 1
+                    except asyncio.TimeoutError:
+                        continue
+                    except websockets.ConnectionClosed:
+                        break
+                    except Exception:
+                        continue
         except Exception as e:
+            fail_count += 1
+            if fail_count <= 3:
+                addlog("warn", f"RTDS poll hata: {type(e).__name__}: {e}")
             if _rtds_running:
-                addlog("warn", f"RTDS {sym} hata: {type(e).__name__}: {e} — {retry}sn sonra yeniden")
-                await asyncio.sleep(retry)
-                retry = min(retry * 2, 30)
+                await asyncio.sleep(min(fail_count, 5))
+                continue
+        # Hemen bir sonraki cycle — bekleme yok
 
 async def start_rtds():
-    """Tum coinler icin RTDS WebSocket baglantilari baslat — paralel, stagger yok."""
+    """RTDS polling baslat — tek baglantida 7 coin ~500ms guncelleme."""
     global _rtds_running
     _rtds_running = True
-    for sym, rtds_sym in RTDS_SYMBOLS.items():
-        asyncio.create_task(_rtds_coin_loop(sym, rtds_sym))
-    addlog("success", f"RTDS basladi: {len(RTDS_SYMBOLS)} coin paralel izleniyor")
+    asyncio.create_task(_rtds_poll_loop())
+    addlog("success", f"RTDS polling baslatildi — {len(RTDS_SYMBOLS)} coin ~500ms guncelleme")
 
 
 async def relayer_health_loop():
@@ -875,6 +1002,16 @@ async def ws_endpoint(ws: WebSocket):
                 continue
             if msg.get("type") == "ping":
                 await ws.send_text(json.dumps({"type": "pong"}))
+            elif msg.get("type") == "price_relay":
+                # Browser RTDS streaming → backend relay.
+                # Browser wss://ws-live-data.polymarket.com'dan type:update alır (~1Hz),
+                # backend Python'dan alamaz (Cloudflare bot tespiti).
+                # Browser burada fiyatı backend'e iletir → backend _rtds_prices günceller.
+                sym = msg.get("sym", "")
+                val = msg.get("val", 0)
+                if sym and isinstance(val, (int, float)) and val > 0:
+                    _rtds_prices[sym] = round(float(val), 2)
+                    _rtds_prices_ts[sym] = time.time()  # freshness kaydı
             elif msg.get("type") == "select_asset":
                 sym = msg.get("asset", "BTC")
                 if sym in ASSETS:

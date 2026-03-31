@@ -12,7 +12,10 @@
 // Frontend direkt WS'ler devre dışı — fiyatlar backend broadcast'ten gelir.
 //
 // Debug modu için: tarayıcı konsolunda _enableDebugWs() yaz → direkt feed açılır.
-const _BACKEND_ONLY_MODE = true;  // false = eski direkt WS modu (debug)
+// TRUE = backend tek fiyat otoritesi, seesawing yok. Browser RTDS'e bağlanır
+// ama fiyatları backend'e relay eder — state.assets ASLA frontend'den güncellenmez.
+// Bu ayarı false yapmayın: seesawing geri döner, mimari bozulur.
+const _BACKEND_ONLY_MODE = true;
 
 let _directClob   = null;  // CLOB WS — debug modda UP/DOWN token fiyatları
 let _directRtds   = null;  // RTDS WS — debug modda spot fiyatlar
@@ -347,58 +350,66 @@ function _startDirectClob() {
 }
 
 // ─── Direkt Feed: RTDS WebSocket (spot fiyatlar — BTC/ETH/SOL etc.) ──────────
+// Her coin ayrı WS bağlantısı alıyor — tek bağlantıda çoklu sub, server sadece 1 coin stream ediyor
+const _rtdsWsMap = {};  // rtdsSym → WebSocket
+
+// RTDS relay throttle: her sym için son relay zamanı (ms)
+const _rtdsRelayTs = {};
+const RTDS_RELAY_MIN_MS = 250; // backend'e max 4/sn relay — yeterli, spam yok
+
+function _handleRtdsMsg(data) {
+  if (!data || data === 'PONG') return;
+  try {
+    const msg = JSON.parse(data);
+    const payload = msg.payload;
+    if (!payload) return;
+    const rtdsSym = (payload.symbol || payload.s || '').toLowerCase();
+    const sym = RTDS_SYM_MAP[rtdsSym];
+    if (!sym) return;
+    let val = parseFloat(payload.value);
+    if (!val || val <= 0) {
+      const arr = payload.data;
+      if (arr?.length) val = parseFloat(arr[arr.length - 1]?.value);
+    }
+    if (!val || val <= 0) return;
+
+    // BACKEND_ONLY_MODE: fiyatı state.assets'e yazma, backend'e relay et
+    // Backend _rtds_prices[sym] günceller → broadcast'te tüm clientlara gider
+    const now = Date.now();
+    if (now - (_rtdsRelayTs[sym] || 0) >= RTDS_RELAY_MIN_MS) {
+      _rtdsRelayTs[sym] = now;
+      wsSend({ type: 'price_relay', sym, val });
+    }
+    // Cache güncelle (debug modda veya seesawing olmayan okumalar için)
+    _wsLivePrices[sym] = { val, ts: now };
+  } catch(e) {}
+}
+
+function _startRtdsForSym(rtdsSym) {
+  if (_rtdsWsMap[rtdsSym]) { try { _rtdsWsMap[rtdsSym].close(); } catch(e){} }
+  const ws = new WebSocket('wss://ws-live-data.polymarket.com');
+  _rtdsWsMap[rtdsSym] = ws;
+  ws.onopen = () => ws.send(JSON.stringify({
+    action: 'subscribe',
+    subscriptions: [{ topic: 'crypto_prices', type: '*', filters: JSON.stringify({ symbol: rtdsSym }) }],
+  }));
+  ws.onmessage = ({ data }) => _handleRtdsMsg(data);
+  ws.onclose = () => {
+    delete _rtdsWsMap[rtdsSym];
+    if (_directReady) setTimeout(() => _startRtdsForSym(rtdsSym), 3000);
+  };
+}
+
 function _startDirectRtds() {
-  if (_directRtds) { try { _directRtds.close(); } catch(e){} _directRtds = null; }
-
-  _directRtds = new WebSocket('wss://ws-live-data.polymarket.com');
-
-  _directRtds.onopen = () => {
-    // Tüm coinlere tek bağlantıdan subscribe ol (payload.symbol field var)
-    Object.keys(RTDS_SYM_MAP).forEach(rtdsSym => {
-      _directRtds.send(JSON.stringify({
-        action: 'subscribe',
-        subscriptions: [{ topic: 'crypto_prices', type: '*', filters: JSON.stringify({ symbol: rtdsSym }) }],
-      }));
-    });
-  };
-
-  _directRtds.onmessage = ({ data }) => {
-    if (!data || data === 'PONG') return;
-    try {
-      const msg = JSON.parse(data);
-      const payload = msg.payload;
-      if (!payload) return;
-
-      // Symbol tayini — payload.symbol varsa direkt kullan
-      const rtdsSym = (payload.symbol || payload.s || '').toLowerCase();
-      const sym = RTDS_SYM_MAP[rtdsSym];
-      if (!sym) return;
-
-      // Değer çekimi
-      let val = parseFloat(payload.value);
-      if (!val || val <= 0) {
-        const arr = payload.data;
-        if (arr?.length) val = parseFloat(arr[arr.length - 1]?.value);
-      }
-      if (!val || val <= 0) return;
-
-      // RTDS cache — state_update ezilmesine karşı
-      _wsLivePrices[sym] = { val, ts: Date.now() };
-
-      const keys = _symToKeys[sym] || [];
-      keys.forEach(key => {
-        const a = state.assets[key];
-        if (!a || a.live_price === val) return;
-        a.live_price = val;
-        _prevCardVals[key] = null; // force re-render
-        _scheduleDirectUpdate(key); // rAF batch
-      });
-    } catch(e) {}
-  };
-
-  _directRtds.onclose = () => {
-    setTimeout(() => { if (_directReady) _startDirectRtds(); }, 3000);
-  };
+  // Eski bağlantıları kapat
+  Object.values(_rtdsWsMap).forEach(w => { try { w.close(); } catch(e){} });
+  Object.keys(_rtdsWsMap).forEach(k => delete _rtdsWsMap[k]);
+  // Her coin için ayrı bağlantı — server her bağlantıda 1 coin stream ediyor
+  Object.keys(RTDS_SYM_MAP).forEach((rtdsSym, i) => {
+    setTimeout(() => _startRtdsForSym(rtdsSym), i * 200); // 200ms stagger
+  });
+  // _directRtds legacy ref — ilk coin ws'e işaret eder
+  _directRtds = { readyState: 1 };  // OPEN placeholder
 }
 
 // ─── Direkt Feed: Başlat / Token map yenile ───────────────────────────────────
@@ -407,11 +418,14 @@ let _knownFeedHash = '';
 function _maybeStartDirectFeeds() {
   if (!Object.keys(state.assets).length) return;
 
-  // FAZ 3.5: Backend-only modda direkt WS başlatma — sadece debug modda aç
+  // BACKEND_ONLY_MODE: CLOB WS başlatma (seesawing kaynağı).
+  // RTDS WS başlatılır — fiyatları backend'e relay eder (display değil, relay amaçlı).
+  // CLOB sadece debug modda açılır.
   if (_BACKEND_ONLY_MODE && !window._debugWsEnabled) {
-    // Token map'i güncelle (execution logic için hala gerekli)
     _buildTokenMap();
     _directReady = true;
+    // RTDS relay bağlantılarını başlat (ilk kez veya hash değiştiyse)
+    if (!_directRtds || _directRtds.readyState > 1) _startDirectRtds();
     return;
   }
 
@@ -486,6 +500,7 @@ const _lastKnownSlugs = {}; // key → son bilinen slug (yeni event tespiti içi
 
 function _mergeState(data) {
   if (data.bot_running  !== undefined) state.botRunning   = data.bot_running;
+  if (data.data_health)                state.dataHealth   = data.data_health;
   if (data.mode)                       state.mode         = data.mode;
   if (data.balance      !== undefined) state.balance      = data.balance;
   if (data.session_pnl  !== undefined) state.sessionPnl   = data.session_pnl;

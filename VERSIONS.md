@@ -2,6 +2,161 @@
 
 ---
 
+## v2.5.3 — 2026-03-31
+
+### Backend Authority Architecture + Verification Layer
+
+**Mimari Kurallar (değiştirilemez):**
+- Backend tek karar otoritesidir — frontend display-only
+- Seesawing kesinlikle yasak — tek source of truth
+- Doğrulanmamış veri ile trade açılamaz
+- Gösterilen tüm kritik veri Polymarket ile birebir eşleşmelidir
+
+**Seesawing Kesin Çözüm:**
+- `_BACKEND_ONLY_MODE = true` — kalıcı, asla `false` yapılmayacak
+- Frontend RTDS'e bağlanır ama `state.assets` ASLA frontend'den güncellenmez
+- Browser RTDS fiyatı → `wsSend({type:"price_relay",sym,val})` → backend `_rtds_prices[sym]`
+- Backend bu fiyatları broadcast'e ekler → frontend sadece okur
+
+**Browser-to-Backend Price Relay:**
+- Problem: Python RTDS bağlantısı Cloudflare bot tespiti nedeniyle sadece batch alıyor (~500ms)
+- Çözüm: Browser streaming alıyor (~1Hz), fiyatı backend'e relay ediyor
+- Relay throttle: 250ms/sym (4 update/sn, backend'e spam yok)
+- Her browser bağlantısı kesince Python poll loop (~500ms) devralır — fallback güvenceli
+
+**Verification Layer (backend/main.py):**
+- `_rtds_prices_ts: dict[str, float]` — her fiyat güncellemesinin timestamp'i
+- `RTDS_STALE_SEC = 10.0` — 10s guncelleme gelmezse "stale"
+- `RTDS_PRICE_MIN/MAX` — aralik disi spike/parse hata tespiti
+- `_is_price_fresh(sym)` — taze + geçerli aralık kontrolü
+
+**Stale Data Hard Gate:**
+- `simulation_tick` entry trigger öncesi: `_is_price_fresh(sym)` kontrolü
+- Fiyat stale → entry KESINLIKLE yapılmaz (log: `[STALE_GATE] {key}: {sym} {age}s eski`)
+- "Muhtemelen doğrudur" varsayımı kabul edilmez
+
+**Broadcast Health Metadata:**
+- Her asset: `live_price_age_ms`, `live_price_verified`
+- Sistem geneli: `data_health.verified`, `data_health.rtds_fresh_count`, `data_health.rtds_stale_syms`
+
+**Frontend Health Indicator:**
+- `live_price_verified=false` → `.eac-live-price.stale` CSS → soluk + üstü çizgili
+- Tooltip: "Fiyat doğrulanamadı (stale/invalid) — trade açılmaz"
+
+---
+
+## v2.5.2 — 2026-03-31
+
+### RTDS Live Price — Frontend Direkt Streaming
+
+**Kök Neden Analizi:**
+- `wss://ws-live-data.polymarket.com` Python'dan bağlanınca sadece batch gönderir (streaming yok)
+- Cloudflare Bot Management (`__cf_bm` cookie) Python istemcileri tespit eder → streaming kısıtlanır
+- Browser bağlantısı Cloudflare tarafından "gerçek browser" olarak tanınır → streaming aktif
+- Binance/Kraken gibi dış kaynaklar bu ağda SSL hatası (`WRONG_VERSION_NUMBER`) — erişilemiyor
+
+**Çözüm — Frontend Direkt RTDS:**
+- `_BACKEND_ONLY_MODE = true` → `false` (frontend RTDS'e direkt bağlanıyor)
+- Her coin için **ayrı WebSocket bağlantısı** (`_startRtdsForSym`) — tek bağlantıda server tek coin stream ediyor
+- 7 coin × ayrı WS + 200ms stagger başlangıç
+- `_handleRtdsMsg`: `type: "update"` → `_wsLivePrices[sym]` → `state.assets[key].live_price` → `_scheduleDirectUpdate`
+- Auto-reconnect: 3s sonra yeniden bağlan
+
+**Güncelleme Hızı (ölçülen):**
+- RTDS sunucusu 1-saniyelik tick gönderiyor — bu sunucunun veri çözünürlüğü
+- 10s'de: BTC 11 update, ETH 11, SOL 11, BNB 11, HYPE 23 (toplam 89 update)
+- Live price 10s'de 2 kez değişti (BTC: 67742 → 67757) ✓
+
+**Countdown Düzeltmesi:**
+- `_build_broadcast_payload`: countdown artık `end_ts - time.time()` ile broadcast anında hesaplanıyor
+- Simulation_tick gecikmesinden bağımsız, 50ms broadcast ile smooth güncelleme
+- `cards.js`: `Math.floor(cd % 60)` — float'tan integer'a dönüşüm düzeltildi
+- Delta check: `Math.floor(cd)` ile saniye değişiminde DOM güncelleniyor
+
+**Sınırlamalar (ağ kısıtı):**
+- Binance WS/REST API bu ağda erişilemiyor (SSL proxy hatası)
+- 50-100ms hedef: RTDS sunucu çözünürlüğü ~1s — bu sunucu tarafında sabit bir limit
+
+---
+
+## v2.5.1 — 2026-03-31
+
+### RTDS Live Price Fix — Polling Yaklaşımı (geçici, v2.5.2 ile yerini aldı)
+
+**Kök Neden:**
+- `wss://ws-live-data.polymarket.com` endpoint'i STREAMING DEĞİL — yalnızca tarihsel batch gönderir
+- Server: 1 boş mesaj + 1 batch (120 adet 1-saniyelik fiyat noktası) gönderir, sonra sessizleşir
+- Eski kod: sonsuz `ws.recv()` döngüsü → initial batch'ten sonra hiç mesaj gelmez → frozen
+- `ping_interval=None` + `Origin` header eklenmesi sorunu çözmedi (protokol sorunu değil)
+
+**Çözüm — RTDS Polling:**
+- `_rtds_coin_loop`: sonsuz wait döngüsü → her 3 saniyede reconnect + batch al
+- Her reconnect: sunucuya subscribe → boş mesajı atla → batch al → `arr[-1].value` = anlık fiyat
+- `start_rtds`: 0.4s stagger eklendi (7 coin × 0.4s = ~3s dağılım)
+- Sonuç: 3 saniyede bir fiyat güncellemesi (BTC/ETH/SOL/XRP/DOGE/BNB/HYPE)
+
+**Doğrulama:** 30 saniye boyunca 2 saniye aralıklarla ölçüm:
+- BTC: 67420 → 67407 → 67426 → 67440 (her ~3s'de değişim) ✓
+- ETH: 2091 → 2090 → 2091 → 2090 ✓
+- SOL: güncelleniyor ✓
+
+---
+
+## v2.5.0 — 2026-03-31
+
+### WS Broadcast Hız Optimizasyonu + Doğruluk Testleri
+
+**Kök Neden Tespiti & Çözüm:**
+- Tespit: `127.0.0.1:8002` üzerinde eski bir orphan uvicorn süreci (PID 9568) tüm bağlantıları kaçırıyordu
+- Çözüm: Orphan süreç kill edildi — yalnızca preview sunucusu (0.0.0.0:8002) aktif
+
+**Backend — WS Broadcast Hız:**
+- `_broadcast_timer_thread`: OS thread'i 50ms'de bir tetikler (asyncio scheduler'dan bağımsız)
+- JSON serializasyonu thread'de yapılır — event loop sadece `send_text()` I/O'su yapar
+- `_send_prebuilt(payload)`: `run_coroutine_threadsafe` ile event loop'a iletilir
+- `broadcast_loop`: no-op stub — artık çağrılmaz
+- Debug sayaçları: `app_state["_dbg_thread_count"]`, `app_state["_dbg_loop_count"]`
+- `_build_broadcast_payload`: `_tick` (ms) ve `max_total_trades` eklendi
+
+**Backend — PTB Stale Koruması:**
+- `get_ptb(key, current_slug)`: slug değişmişse 0 döner (stale cache koruması)
+- PTB loop sleep: 10s → 5s (yeni event tespiti hızlandırıldı)
+- `gamma_scan_loop` sleep: 10s → 5s
+
+**Backend — Performans:**
+- `simulation_tick`: ayarlar bir kez yüklenir (`_tick_global_settings`, `_tick_event_settings`)
+- Her 4 event'te bir `await asyncio.sleep(0)` — event loop yield
+- CLOB midpoint: kalıcı `httpx.AsyncClient`, sleep 0.15s → 0.5s
+
+**Backend — API:**
+- `/api/bot/start`: `max_total_trades` body parametresi okunur
+- `/api/bot/stop`: `max_total_trades` sıfırlanır
+- `/api/debug/broadcast`: thread/loop sayaçları endpoint'i (routes.py)
+
+**Frontend — Delta Hesabı:**
+- RTDS `onmessage`'da delta frontend-tarafında hesaplanır: `live_price - ptb`
+- WS gecikmesindemn bağımsız, RTDS hızında (~100ms) güncellenir
+
+**Frontend — Bot Başlatma Modal:**
+- `showBotStartModal()`: max trade sayısı sorar
+- SONSUZ toggle: `max_total_trades = 0` gönderir
+- `confirmBotStart()`: POST `/api/bot/start` `{max_total_trades: N}`
+
+**Frontend — Spread Toggle:**
+- `max_slippage_pct` yanına "AKTİF/DEAKTİF" toggle butonu eklendi
+- `toggleSpreadDisable(key)`: input disable/enable + değer yönetimi
+
+**Frontend — Min/Max Giriş Aralığı:**
+- `min_entry_price` min: 50 → 1
+- `max_entry_price` min: 51 → 1
+
+**Test Sonuçları:**
+- WS hızı: **20.4 msg/sn, 52ms ortalama** (hedef: 50ms ✓)
+- Veri doğruluğu: **35/35 market eşleşti** (34/35 tam, 1/35 <%1 tolerans)
+- Tüm event linkleri güncel ve doğru
+
+---
+
 ## v2.4.0 — 2026-03-31
 
 ### Modülerleştirme — Refactor Faz 3 (Scan + WS + Positions)

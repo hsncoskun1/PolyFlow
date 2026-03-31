@@ -53,6 +53,8 @@ const state = {
   _cardNotifications: {},  // key → {icon, text, type}
   // Collapsible group state
   collapsedGroups: {},
+  // Data health (backend verification layer)
+  dataHealth: { verified: false, rtds_fresh_count: 0, rtds_stale_syms: [], stale_threshold_s: 10 },
 };
 
 let ws             = null;
@@ -474,10 +476,86 @@ async function toggleBot() {
     } catch(e) {
       showToast('Cuzdan durumu kontrol edilemedi.', 'warn');
     }
-    await fetch('/api/bot/start', { method: 'POST' }).catch(() => {});
+    // Bot başlatmadan önce max işlem sayısını sor
+    showBotStartModal();
   } finally {
     _botToggling = false;
   }
+}
+
+function showBotStartModal() {
+  const existing = document.getElementById('bot-start-modal-overlay');
+  if (existing) existing.remove();
+
+  const el = document.createElement('div');
+  el.id = 'bot-start-modal-overlay';
+  el.className = 'cf-overlay';
+  el.innerHTML = `
+    <div class="cf-popup bot-start-popup">
+      <div class="cf-title">▶ Bot Başlat</div>
+      <div class="bot-start-body">
+        <div class="bot-start-row">
+          <span class="bot-start-label">Max İşlem Sayısı</span>
+          <div class="bot-start-ctrl">
+            <input type="number" id="bsm-max-trades" class="as-input"
+                   min="1" max="9999" step="1" value="10" placeholder="örn: 10" style="width:64px;text-align:right;" />
+            <span class="as-row-unit">↺</span>
+            <button class="as-spread-toggle on" id="bsm-infinite-btn"
+                    type="button" onclick="toggleBotStartInfinite()"
+                    title="Sonsuz mod — bot otomatik durmadan çalışır">
+              SONSUZ
+            </button>
+          </div>
+        </div>
+        <div class="bot-start-hint">
+          Sonsuz modda bot siz durdurana kadar çalışır. Kapalıysa, belirlenen sayıda işlem sonrası otomatik durur.
+        </div>
+      </div>
+      <div class="cf-actions">
+        <button class="cf-btn-cancel" onclick="document.getElementById('bot-start-modal-overlay').remove()">İptal</button>
+        <button class="cf-btn-confirm trade" onclick="confirmBotStart()">▶ Başlat</button>
+      </div>
+    </div>`;
+  document.body.appendChild(el);
+  el.addEventListener('click', e => { if (e.target === el) el.remove(); });
+
+  // Başlangıçta sonsuz kapalı — input aktif
+  _botStartInfinite = false;
+  _updateBotStartUI();
+}
+
+let _botStartInfinite = false;
+function toggleBotStartInfinite() {
+  _botStartInfinite = !_botStartInfinite;
+  _updateBotStartUI();
+}
+function _updateBotStartUI() {
+  const input = document.getElementById('bsm-max-trades');
+  const btn   = document.getElementById('bsm-infinite-btn');
+  if (!input || !btn) return;
+  if (_botStartInfinite) {
+    input.disabled = true;
+    input.style.opacity = '0.35';
+    btn.textContent = 'SONSUZ';
+    btn.className = 'as-spread-toggle on';
+  } else {
+    input.disabled = false;
+    input.style.opacity = '';
+    btn.textContent = 'SINIRLI';
+    btn.className = 'as-spread-toggle off';
+  }
+}
+
+async function confirmBotStart() {
+  const overlay = document.getElementById('bot-start-modal-overlay');
+  const input   = document.getElementById('bsm-max-trades');
+  const maxTrades = _botStartInfinite ? 0 : (parseInt(input?.value) || 0);
+  if (overlay) overlay.remove();
+  await fetch('/api/bot/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ max_total_trades: maxTrades }),
+  }).catch(() => {});
 }
 
 function pauseBot() {

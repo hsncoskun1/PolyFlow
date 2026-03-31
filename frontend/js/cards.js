@@ -32,7 +32,7 @@ function updateCardsInPlace(keys) {
     const _pv = _prevCardVals[key];
     const rulesStr = a.rules ? Object.values(a.rules).join('') : '';
     const _cv = {
-      p: a.price, cd, uA: mp.up_ask, dA: mp.down_ask,
+      p: a.price, cd: Math.floor(cd), uA: mp.up_ask, dA: mp.down_ask,
       lp: a.live_price, r: rulesStr,
       ptb: a.ptb || 0,               // PTB değişince güncelle
     };
@@ -74,9 +74,13 @@ function updateCardsInPlace(keys) {
     const deltaEl     = card.querySelector('.eac-inline-delta');
     if (a.live_price && a.live_price > 0) {
       const lpStr = '$' + Number(a.live_price).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+      // Backend doğrulama: live_price_verified=false → stale/invalid — kullanıcıya göster ama soluk
+      const verified = a.live_price_verified !== false;  // undefined = backend eski versiyon, varsayılan OK
       if (livePriceEl) {
         livePriceEl.textContent = lpStr;
         livePriceEl.style.display = '';
+        livePriceEl.classList.toggle('stale', !verified);
+        livePriceEl.title = verified ? '' : 'Fiyat doğrulanamadı (stale/invalid) — trade açılmaz';
       } else {
         const ptbRow = ptbEl?.parentElement;
         if (ptbRow) {
@@ -497,7 +501,7 @@ function renderEventBody(sym) {
   const rules = a.rules  || {};
   const cd    = a.countdown || 0;
   const mins  = Math.floor(cd / 60);
-  const secs  = String(cd % 60).padStart(2, '0');
+  const secs  = String(Math.floor(cd % 60)).padStart(2, '0');
 
   const barPct   = cd > 0 ? Math.max(2, ((300 - cd) / 300) * 100) : 0;
   const barColor = cd <= 20 ? 'var(--accent-red)' : cd <= 60 ? 'var(--accent-yellow)' : 'var(--accent-purple)';
