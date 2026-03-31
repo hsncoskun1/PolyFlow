@@ -203,6 +203,23 @@ async def try_open_position(
             mode=settings.get("mode", "LIVE"),
         )
 
+        # Fill detaylarını pozisyona ekle (order_id + actual_fill_shares)
+        try:
+            from backend.execution.order_executor import get_last_entry_info, clear_entry_info
+            fi = get_last_entry_info(event_key)
+            if fi:
+                pos.order_id = fi.get("order_id", "")
+                fill_sz = fi.get("fill_size", 0.0)
+                if fill_sz > 0:
+                    pos.actual_fill_shares = fill_sz
+                    # Gerçek shares'i fill_size / entry_price'dan güncelle
+                    if actual_price > 0:
+                        pos.shares = round(fill_sz / actual_price, 6)
+                pos.fill_confirmed = True  # REST response fill sayılır
+                clear_entry_info(event_key)
+        except Exception:
+            pass
+
         logger.info(
             f"Entry başarılı [{event_key}] — {side} @ {actual_price:.4f} | "
             f"TP: {exit_target:.4f} | SL: {stop_loss_price:.4f} | ${amount}"

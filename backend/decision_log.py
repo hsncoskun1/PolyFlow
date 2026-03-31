@@ -149,3 +149,97 @@ def log_bot_event(event_type: str, detail: str = ""):
         logger.info(f"[AUDIT] BOT_EVENT: {event_type} — {detail}")
     except Exception as e:
         logger.error(f"log_bot_event hata: {e}")
+
+
+def log_order_reject(
+    event_key: str,
+    reason: str,
+    side: str = "",
+    order_id: str = "",
+):
+    """Order reject/cancel/timeout durumunu logla."""
+    try:
+        from backend.storage.db import save_audit_log
+        save_audit_log({
+            "event_key":      event_key,
+            "decision":       "ORDER_REJECT",
+            "reason":         reason,
+            "side":           side,
+            "entry_price":    0.0,
+            "exit_price":     0.0,
+            "pnl":            0.0,
+            "amount":         0.0,
+            "rules_snapshot": json.dumps({"order_id": order_id}) if order_id else "{}",
+            "trade_id":       order_id,
+            "timestamp":      datetime.now().isoformat(),
+        })
+        logger.warning(f"[AUDIT] ORDER_REJECT [{event_key}] reason={reason} order_id={order_id}")
+    except Exception as e:
+        logger.error(f"log_order_reject hata [{event_key}]: {e}")
+
+
+def log_partial_fill(
+    event_key: str,
+    expected_amount: float,
+    actual_amount: float,
+    order_id: str = "",
+):
+    """Partial fill durumunu logla."""
+    fill_pct = round(actual_amount / max(expected_amount, 0.001) * 100, 1)
+    try:
+        from backend.storage.db import save_audit_log
+        save_audit_log({
+            "event_key":      event_key,
+            "decision":       "PARTIAL_FILL",
+            "reason":         f"fill_pct:{fill_pct}",
+            "side":           "",
+            "entry_price":    0.0,
+            "exit_price":     0.0,
+            "pnl":            0.0,
+            "amount":         actual_amount,
+            "rules_snapshot": json.dumps({"expected": expected_amount, "actual": actual_amount, "pct": fill_pct}),
+            "trade_id":       order_id,
+            "timestamp":      datetime.now().isoformat(),
+        })
+        logger.warning(
+            f"[AUDIT] PARTIAL_FILL [{event_key}] expected={expected_amount:.4f} "
+            f"actual={actual_amount:.4f} ({fill_pct}%) order_id={order_id}"
+        )
+    except Exception as e:
+        logger.error(f"log_partial_fill hata [{event_key}]: {e}")
+
+
+def log_reconcile_discrepancy(
+    event_key: str,
+    trade_id: str,
+    expected_shares: float,
+    actual_shares: float,
+    reason: str = "",
+):
+    """Reconciler tarafından tespit edilen tutarsızlığı logla."""
+    diff_pct = round(abs(expected_shares - actual_shares) / max(expected_shares, 0.001) * 100, 1)
+    try:
+        from backend.storage.db import save_audit_log
+        save_audit_log({
+            "event_key":      event_key,
+            "decision":       "RECONCILE_DISCREPANCY",
+            "reason":         reason or f"shares_diff:{diff_pct}pct",
+            "side":           "",
+            "entry_price":    0.0,
+            "exit_price":     0.0,
+            "pnl":            0.0,
+            "amount":         0.0,
+            "rules_snapshot": json.dumps({
+                "expected_shares": expected_shares,
+                "actual_shares":   actual_shares,
+                "diff_pct":        diff_pct,
+            }),
+            "trade_id":       trade_id,
+            "timestamp":      datetime.now().isoformat(),
+        })
+        logger.warning(
+            f"[AUDIT] RECONCILE_DISCREPANCY [{event_key}] [{trade_id}] "
+            f"expected={expected_shares:.6f} actual={actual_shares:.6f} ({diff_pct}%) reason={reason}"
+        )
+    except Exception as e:
+        logger.error(f"log_reconcile_discrepancy hata [{event_key}]: {e}")

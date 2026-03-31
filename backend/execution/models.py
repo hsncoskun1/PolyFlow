@@ -47,6 +47,11 @@ class PositionState:
     mode:                 str   = "LIVE"
     created_at:           str   = ""
 
+    # Fill confirmation
+    order_id:             str   = ""    # Entry order_id (CLOB'dan)
+    fill_confirmed:       bool  = False # User WS veya reconciler doğruladı
+    actual_fill_shares:   float = 0.0   # Gerçek fill miktarı (partial fill için)
+
     def calc_pnl(self, mark_price: float) -> float:
         """Gerçek PnL: shares × mark - amount  (shares = amount / entry_actual)"""
         if self.entry_actual <= 0:

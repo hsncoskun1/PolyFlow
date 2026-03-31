@@ -26,15 +26,17 @@ from config import load_settings, save_settings, get_wallet_config
 logger = logging.getLogger("polyflow")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 
-# ─── EXECUTION ENGINE (FAZ 1) ─────────────────────────────────────────────────
+# ─── EXECUTION ENGINE (FAZ 1 + FAZ 3) ───────────────────────────────────────
 try:
     from backend.execution import entry_service as _entry_svc
     from backend.execution import position_tracker as _pos_tracker
     from backend.execution import sell_retry as _sell_retry
     from backend.execution import order_executor as _order_exec
+    from backend.execution import reconciler as _reconciler
+    from backend.execution import user_ws as _user_ws
     _EXEC_AVAILABLE = True
 except ImportError as _e:
-    logger.warning(f"Execution engine import hatası: {_e} — trading devre dışı")
+    logger.warning(f"Execution engine import hatasi: {_e} — trading devre disi")
     _EXEC_AVAILABLE = False
 
 # Event başına trade sayacı (entry_service.try_open_position için)
@@ -413,6 +415,9 @@ async def broadcast_state(force: bool = False):
 async def broadcast_loop():
     while True:
         try:
+            # User WS bağlantı durumunu güncelle
+            if _EXEC_AVAILABLE:
+                app_state["connection_status"]["user_ws"] = _user_ws.is_connected()
             await broadcast_state()
         except Exception as e:
             logger.error(f"broadcast_loop: {e}")
@@ -1412,7 +1417,10 @@ async def lifespan(app):
         _pos_tracker.set_close_callback(_session_pnl_callback)
         # LIVE modda client'ı önceden ısıt
         _order_exec.init_live_client()
-        addlog("success", "Execution engine hazir — FAZ 1 aktif")
+        # Reconciler getter'larını inject et
+        _reconciler.set_market_cache_getter(lambda k: _market_cache.get(k, {}))
+        _reconciler.set_balance_updater(lambda bal: app_state.update({"balance": bal}))
+        addlog("success", "Execution engine hazir — FAZ 1+3 aktif")
 
     tasks = []
     try:
@@ -1425,14 +1433,18 @@ async def lifespan(app):
         tasks.append(asyncio.create_task(_ptb_loop()))
         await start_rtds()  # RTDS WebSocket — canli coin fiyatlari
 
-        # Sell retry exit loop başlat
+        # Execution servisleri başlat
         if _EXEC_AVAILABLE:
-            await _sell_retry.start()
+            await _sell_retry.start()      # TP/SL/Force 100ms loop
+            await _reconciler.start()      # 30s token balance reconciliation
+            await _user_ws.start()         # CLOB user fill events
 
         yield
     finally:
         if _EXEC_AVAILABLE:
             await _sell_retry.stop()
+            await _reconciler.stop()
+            await _user_ws.stop()
         for t in tasks:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)

@@ -17,6 +17,9 @@ logger = logging.getLogger("polyflow.executor")
 _clob_client = None
 _clob_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="clob")
 
+# Son entry işleminin detayları — entry_service tarafından okunur
+_last_entry_info: dict = {}   # event_key → {"order_id": str, "fill_size": float, "status": str}
+
 CLOB_HOST        = "https://clob.polymarket.com"
 POLYGON_CHAIN_ID = 137
 
@@ -91,6 +94,16 @@ def _reset_clob_client():
     """Hata sonrasında client sıfırla."""
     global _clob_client
     _clob_client = None
+
+
+def get_last_entry_info(event_key: str) -> dict:
+    """Son entry'nin fill detaylarını döndür (entry_service tarafından okunur)."""
+    return _last_entry_info.get(event_key, {})
+
+
+def clear_entry_info(event_key: str):
+    """Entry info'yu temizle (pozisyon açıldıktan sonra)."""
+    _last_entry_info.pop(event_key, None)
 
 
 def _load_env():
@@ -181,9 +194,34 @@ async def execute_entry(
                     f"LIVE giriş OK [{event_key}] — {side} @ {actual:.4f} "
                     f"(hedef {entry_price:.4f}) | {elapsed_ms:.0f}ms"
                 )
+                # Fill detaylarını side-channel'a yaz
+                fill_size = _parse_fill_size(resp)
+                _last_entry_info[event_key] = {
+                    "order_id": str(order_id)[:32],
+                    "fill_size": fill_size,
+                    "status": status,
+                }
+                # Partial fill tespiti (FOK'ta nadiren olur ama logla)
+                if fill_size > 0 and abs(fill_size - amount) / max(amount, 0.01) > 0.05:
+                    logger.warning(
+                        f"Partial fill tespit edildi [{event_key}] — "
+                        f"beklenen: {amount:.4f}, alinan: {fill_size:.4f} "
+                        f"({fill_size/amount*100:.0f}%)"
+                    )
+                    try:
+                        from backend.decision_log import log_partial_fill
+                        log_partial_fill(event_key, amount, fill_size, str(order_id)[:32])
+                    except Exception:
+                        pass
                 return actual
             else:
                 logger.warning(f"LIVE giriş dolmadı [{event_key}] — status: {status}")
+                # Reject/cancel durumunu logla
+                try:
+                    from backend.decision_log import log_order_reject
+                    log_order_reject(event_key, f"order_not_filled_status:{status}", "BUY")
+                except Exception:
+                    pass
                 return None
 
         except Exception as e:
@@ -335,6 +373,21 @@ def _parse_fill_price(resp: dict, fallback: float) -> float:
     except Exception:
         pass
     return fallback
+
+
+def _parse_fill_size(resp: dict) -> float:
+    """API yanıtından fill edilen miktarı çıkar."""
+    try:
+        for key in ("size", "filled_size", "filledSize", "amount"):
+            v = resp.get(key)
+            if v:
+                return float(v)
+        fills = resp.get("fills") or resp.get("trades") or []
+        if fills:
+            return sum(float(f.get("size", 0)) for f in fills if f.get("size"))
+    except Exception:
+        pass
+    return 0.0
 
 
 async def fetch_usdc_balance() -> Optional[float]:
