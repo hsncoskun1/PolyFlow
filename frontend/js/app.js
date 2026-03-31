@@ -1092,10 +1092,6 @@ function updateCardsInPlace(keys) {
     }
 
     // PTB + canli fiyat guncelle
-    const ptbEl = card.querySelector('.eac-ptb-val');
-    if (ptbEl && a.ptb) {
-      ptbEl.textContent = '$' + Number(a.ptb).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
-    }
     const liveEl = card.querySelector('.eac-live-price');
     if (a.live_price) {
       if (liveEl) {
