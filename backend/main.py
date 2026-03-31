@@ -26,6 +26,20 @@ from config import load_settings, save_settings, get_wallet_config
 logger = logging.getLogger("polyflow")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 
+# ─── EXECUTION ENGINE (FAZ 1) ─────────────────────────────────────────────────
+try:
+    from backend.execution import entry_service as _entry_svc
+    from backend.execution import position_tracker as _pos_tracker
+    from backend.execution import sell_retry as _sell_retry
+    from backend.execution import order_executor as _order_exec
+    _EXEC_AVAILABLE = True
+except ImportError as _e:
+    logger.warning(f"Execution engine import hatası: {_e} — trading devre dışı")
+    _EXEC_AVAILABLE = False
+
+# Event başına trade sayacı (entry_service.try_open_position için)
+_event_trade_counts: dict = {}  # event_key → int
+
 BASE_DIR = Path(__file__).parent.parent
 FRONTEND_DIR = BASE_DIR / "frontend"
 
@@ -208,6 +222,23 @@ async def simulation_tick():
                 rules = _make_asset_rules(sym, cd, mp, key=key)
                 settings_configured = rules.get("time") != "no_settings"
 
+                # ── ENTRY TRIGGER ─────────────────────────────────────────────
+                # Tüm kurallar PASS + bot çalışıyor + ayarlar var → entry tetikle
+                if (_EXEC_AVAILABLE
+                        and app_state.get("bot_running")
+                        and settings_configured
+                        and not _entry_svc.is_event_locked(key)
+                        and all(v == "pass" for v in rules.values())):
+                    from backend.config import load_settings as _ls
+                    from backend.storage.db import get_event_settings as _ges
+                    ev_s = _ges(key) or {}
+                    merged_s = {**_ls(), **ev_s}
+                    trade_count = _event_trade_counts.get(key, 0)
+                    open_count  = _pos_tracker.get_active_count()
+                    asyncio.create_task(entry_service_task(
+                        key, sym, mp, rules, merged_s, real, open_count, trade_count
+                    ))
+
                 # Event verisi (Polymarket'ten)
                 real_event = {
                     "id":            real.get("conditionId") or real.get("slug", ""),
@@ -257,6 +288,17 @@ async def simulation_tick():
             app_state["assets"] = asset_states
             app_state["ws_client_count"] = len(ws_clients)
 
+            # ── POSITION TRACKER SYNC ─────────────────────────────────────────
+            # Açık pozisyonların mark fiyatlarını güncelle + app_state'e yaz
+            if _EXEC_AVAILABLE:
+                for pos in _pos_tracker.get_active_positions():
+                    k = pos.event_key
+                    m = _asset_market.get(k, {})
+                    mark = m.get("up_ask" if pos.side == "UP" else "down_ask", 0)
+                    if mark > 0:
+                        _pos_tracker.update_mark(pos.trade_id, mark)
+                app_state["positions"] = _pos_tracker.to_app_state_positions()
+
         except Exception as e:
             logger.error(f"simulation_tick hata: {e}")
 
@@ -291,6 +333,30 @@ async def simulation_tick():
                     app_state["trade_history"].insert(0, trade)
                     app_state["positions"] = [p for p in app_state["positions"] if p["id"] != pos["id"]]
                     addlog("warn", f"FORCE_CLOSE {pos['asset']} — market kayboldu")
+
+
+# ─── ENTRY SERVICE TASK WRAPPER ──────────────────────────────────────────────
+async def entry_service_task(key, sym, mp, rules, settings, market_info, open_count, trade_count):
+    """entry_service.try_open_position'ı asyncio task olarak çalıştıran wrapper."""
+    if not _EXEC_AVAILABLE:
+        return
+    try:
+        success = await _entry_svc.try_open_position(
+            event_key=key,
+            sym=sym,
+            mp=mp,
+            rules=rules,
+            settings=settings,
+            market_info=market_info,
+            open_position_count=open_count,
+            event_trade_count=trade_count,
+        )
+        if success:
+            _event_trade_counts[key] = _event_trade_counts.get(key, 0) + 1
+            addlog("success", f"Pozisyon açıldı: {key} | toplam: {_event_trade_counts[key]}")
+    except Exception as e:
+        logger.error(f"entry_service_task hata [{key}]: {e}")
+        _entry_svc.unlock_event(key)
 
 
 # ─── BROADCAST ────────────────────────────────────────────────────────────────
@@ -562,6 +628,10 @@ async def scan_slug_based():
                                 if old_slug and old_slug != new_slug:
                                     addlog("info", f"Yeni event (slug-scan): {key} {old_slug} → {new_slug} | market+WS reset")
                                     _market_cache_update_ts = time.time()  # CLOB WS reconnect sinyali
+                                    # Yeni event → trade sayacı ve entry lock sıfırla
+                                    _event_trade_counts.pop(key, None)
+                                    if _EXEC_AVAILABLE:
+                                        _entry_svc.clear_lock_for_new_event(key, new_slug, old_slug)
                             total += 1
                         else:
                             old = _market_cache.get(key)
@@ -977,6 +1047,10 @@ async def scan_gamma_markets():
                     if slug_changed:
                         addlog("info", f"Yeni event: {key} {old_slug} -> {new_slug} | market reset")
                         _market_cache_update_ts = time.time()  # CLOB WS reconnect sinyali
+                        # Yeni event → trade sayacı ve entry lock sıfırla
+                        _event_trade_counts.pop(key, None)
+                        if _EXEC_AVAILABLE:
+                            _entry_svc.clear_lock_for_new_event(key, new_slug, old_slug)
                 # NOT: mevcut CLOB WS/midpoint degerlerini ezme — onlar daha dogru
                 total_found += 1
 
@@ -1158,6 +1232,9 @@ async def clob_ws_connect():
                             a = _clob_prices[tid].get("best_ask", 0)
                             if not p:
                                 return
+                            # Stale data guard için son fiyat zamanını kaydet
+                            if _EXEC_AVAILABLE:
+                                _entry_svc.record_price_update(mkey)
                             # NOT: up_mid sadece REST midpoint poll tarafindan yazilir
                             # WS bid/ask event sonunda 0.01/0.99 spike yapabilir
                             if side == "up":
@@ -1294,6 +1371,24 @@ async def lifespan(app):
     except Exception as e:
         addlog("warn", f"Startup scan hatasi: {e} — arka planda devam edilecek")
 
+    # ─── EXECUTION ENGINE BAŞLAT ─────────────────────────────────────────────
+    if _EXEC_AVAILABLE:
+        # Sell retry'ye market data getter'larını inject et
+        _sell_retry.set_market_data_getter(lambda k: _asset_market.get(k, {}))
+        _sell_retry.set_countdown_getter(
+            lambda k: max(0, int(_market_cache.get(k, {}).get("end_ts", 0)) - int(time.time()))
+        )
+        _sell_retry.set_token_id_getter(
+            lambda k, side: (
+                (_market_cache.get(k, {}).get("tokens", []) or ["", ""])[0 if side == "UP" else 1]
+            )
+        )
+        # DB'den önceki açık pozisyonları yükle (restart recovery)
+        _pos_tracker.load_open_positions_from_db()
+        # LIVE modda client'ı önceden ısıt
+        _order_exec.init_live_client()
+        addlog("success", "Execution engine hazır — FAZ 1 aktif")
+
     tasks = []
     try:
         tasks.append(asyncio.create_task(broadcast_loop()))
@@ -1304,8 +1399,15 @@ async def lifespan(app):
         tasks.append(asyncio.create_task(relayer_health_loop()))
         tasks.append(asyncio.create_task(_ptb_loop()))
         await start_rtds()  # RTDS WebSocket — canli coin fiyatlari
+
+        # Sell retry exit loop başlat
+        if _EXEC_AVAILABLE:
+            await _sell_retry.start()
+
         yield
     finally:
+        if _EXEC_AVAILABLE:
+            await _sell_retry.stop()
         for t in tasks:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
