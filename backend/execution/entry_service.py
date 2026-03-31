@@ -186,9 +186,8 @@ async def try_open_position(
                 pass
             return False
 
-        # PERCENT modda gerçek fill'den yeniden hesapla
-        if settings.get("strategy_mode", "NUMERIC") == "PERCENT":
-            exit_target, stop_loss_price = _calc_targets(actual_price, settings)
+        # Gerçek fill fiyatından TP/SL yeniden hesapla
+        exit_target, stop_loss_price = _calc_targets(actual_price, settings)
 
         # ─── Pozisyon aç ─────────────────────────────────────────────────
         pos = position_tracker.open_position(
@@ -278,17 +277,12 @@ def _determine_side(rules: dict, mp: dict, settings: dict) -> Optional[str]:
 
 
 def _calc_targets(entry_price: float, settings: dict) -> tuple[float, float]:
-    """TP ve SL fiyatlarını hesapla (NUMERIC veya PERCENT mod)."""
-    mode = settings.get("strategy_mode", "NUMERIC")
-    if mode == "PERCENT":
-        tp_pct = float(settings.get("target_exit_pct", 5.0))
-        sl_pct = float(settings.get("stop_loss_pct", 10.0))
-        raw_exit = round(entry_price * (1 + tp_pct / 100.0), 4)
-        exit_target = min(raw_exit, 0.99)
-        sl_price = max(round(entry_price * (1 - sl_pct / 100.0), 4), 0.01)
-    else:
-        exit_target = float(settings.get("target_exit_price", 0.95))
-        sl_price    = float(settings.get("stop_loss_price",  0.80))
+    """TP ve SL fiyatlarını hesapla — PERCENT mod (giriş fiyatına göre yüzde)."""
+    tp_pct = float(settings.get("target_exit_pct", 20.0))
+    sl_pct = float(settings.get("stop_loss_pct", 15.0))
+    raw_exit = round(entry_price * (1 + tp_pct / 100.0), 4)
+    exit_target = min(raw_exit, 0.99)
+    sl_price = max(round(entry_price * (1 - sl_pct / 100.0), 4), 0.01)
     return exit_target, sl_price
 
 

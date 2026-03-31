@@ -1652,7 +1652,6 @@ EVENT_SETTINGS_FIELDS = [
     "time_rule_threshold", "min_entry_seconds",
     "min_move_delta", "max_slippage_pct",
     "event_trade_limit", "max_open_positions",
-    "target_exit_price", "stop_loss_price",
     "stop_loss_enabled", "force_sell_enabled",
     "force_sell_before_resolution_seconds",
     "sell_retry_count", "order_amount",

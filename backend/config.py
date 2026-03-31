@@ -24,9 +24,9 @@ DEFAULT_SETTINGS = {
     "min_btc_move_up": 70.0,
     "min_btc_move_down": 70.0,
     "max_slippage_pct": 0.03,
-    # Cikis kurallari
-    "target_exit_price": 0.90,
-    "stop_loss_price": 0.50,
+    # Cikis kurallari (PERCENT mod — fiyat yerine yüzde)
+    "target_exit_pct": 20.0,
+    "stop_loss_pct": 15.0,
     "stop_loss_enabled": True,
     "force_sell_enabled": True,
     "force_sell_before_resolution_seconds": 15,
@@ -41,10 +41,6 @@ DEFAULT_SETTINGS = {
     "max_total_trades": 0,
     "one_trade_per_event": True,
     "auto_claim": True,
-    # Eski uyumluluk
-    "target_exit_pct": 20.0,
-    "stop_loss_pct": 15.0,
-    "exit_mode": "NUMERIC",
     "order_amount_pct": 10.0,
     "amount_mode": "USD",
     "btc_price_source": "POLYMARKET",
