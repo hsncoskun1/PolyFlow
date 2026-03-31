@@ -2,6 +2,20 @@
 
 ---
 
+## v2.2.0 — 2026-03-31
+
+### Modülerleştirme — Refactor Faz 2 (API Routes)
+
+**Backend API Router Extract**
+- `backend/api/__init__.py` + `backend/api/routes.py` oluşturuldu — FastAPI APIRouter ile 23 temiz route ayrıştırıldı
+- Taşınan route'lar: `/api/status`, `/api/settings`, `/api/settings/{key}` (CRUD), `/api/settings-all`, `/api/bot/start`, `/api/bot/stop`, `/api/bot/safe-mode/disable`, `/api/assets`, `/api/assets/{sym}/pin`, `/api/positions`, `/api/positions/history`, `/api/positions/{pos_id}/close`, `/api/trades`, `/api/stats/daily`, `/api/audit`, `/api/logs`, `/api/wallet`, `/api/wallet/save`, `/api/test/market`, `/api/test/prices`
+- `EVENT_SETTINGS_FIELDS` whitelist routes.py'ye taşındı
+- main.py'de kalan 9 kompleks route: `emergency-stop`, `markets/matched`, `coins`, `timeframes`, `coins/{sym}/add+remove`, `debug/inject`, `verify` (module-level state bağımlı)
+- main.py satır sayısı: 1945 → 1651 (-294 satır)
+- Test: `/api/status` ✓ `/api/logs` ✓ `/api/settings` ✓ `/api/wallet` ✓
+
+---
+
 ## v2.1.0 — 2026-03-31
 
 ### Modülerleştirme — Refactor Faz 1
