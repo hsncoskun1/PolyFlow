@@ -13,8 +13,8 @@ const EVENT_SETTING_FIELDS = [
   // — Giriş Koşulları —
   { key:'min_entry_price',    label:'Min Giriş',         unit:'%',  min:50,  max:99,    step:'1',   placeholder:'örn: 76',  hint:'UP token minimum olasılık eşiği. Bu değerin altında işlem açılmaz. (örn: 76 = %76)' },
   { key:'max_entry_price',    label:'Max Giriş',         unit:'%',  min:51,  max:99,    step:'1',   placeholder:'örn: 97',  hint:'UP token maksimum olasılık eşiği. Bu değerin üzerinde işlem açılmaz. (örn: 97 = %97)' },
-  { key:'time_rule_threshold',label:'Zaman Kuralı',       unit:'sn', min:10,  max:300,   step:'5',   placeholder:'örn: 90',  hint:'Ne kadar zaman kala işleme girsin? Sayaç bu değerin altına inince giriş koşulu aktifleşir. Örn: 90 → event bitmesine 90sn kalınca pencere açılır.' },
-  { key:'min_entry_seconds',  label:'Min Kalan Süre',    unit:'sn', min:0,   max:120,   step:'1',   placeholder:'örn: 20',  hint:'Event bitmesine en az bu kadar süre kalmalı. Bu süreden azsa giriş yapılmaz.' },
+  { key:'min_entry_seconds',  label:'Min Kalan Süre',    unit:'sn', min:0,   max:120,   step:'1',   placeholder:'örn: 10',  hint:'Event bitmesine en az bu kadar süre kalmalı. Bu süreden azsa giriş yapılmaz.' },
+  { key:'time_rule_threshold',label:'Max Kalan Süre',    unit:'sn', min:10,  max:300,   step:'5',   placeholder:'örn: 290', hint:'Sayaç bu değerin altına inince giriş penceresi açılır. Örn: 290 → event bitmesine 290sn kalınca giriş koşulları aktifleşir.' },
   { key:'min_move_delta',     label:'Min Fiyat Hareketi',unit:'$',  min:0,   max:5000,  step:'1',   placeholder:'örn: 70',  hint:'Coin fiyatında son periyotta gereken minimum $ değişimi. Düşük volatilitede giriş engellenir.' },
   { key:'max_slippage_pct',   label:'Max Spread',        unit:'%',  min:0.5, max:50,    step:'0.5', placeholder:'örn: 3',   hint:'Bid-ask spread (alış-satış farkı) üst sınırı. %50 girersen kural devre dışı kalır.' },
   // — Çıkış Stratejisi —
@@ -30,7 +30,7 @@ const EVENT_SETTING_FIELDS = [
 
 // Bölüm grupları — confirm popup tablosu için (düz liste)
 const AS_SECTIONS = [
-  { label: 'Giriş Koşulları', keys: ['min_entry_price','max_entry_price','time_rule_threshold','min_entry_seconds','min_move_delta','max_slippage_pct'] },
+  { label: 'Giriş Koşulları', keys: ['min_entry_price','max_entry_price','min_entry_seconds','time_rule_threshold','min_move_delta','max_slippage_pct'] },
   { label: 'Çıkış Stratejisi', keys: ['target_exit_pct','stop_loss_pct','force_sell_before_resolution_seconds','sell_retry_count'] },
   { label: 'Limitler',         keys: ['order_amount','event_trade_limit','max_open_positions'] },
 ];
@@ -41,7 +41,7 @@ const AS_LAYOUT = [
     label: 'Giriş Koşulları',
     rows: [
       { pair: ['min_entry_price',    'max_entry_price']         }, // Min | Max giriş
-      { pair: ['time_rule_threshold','min_entry_seconds']       }, // Zaman kuralı | Min kalan
+      { pair: ['min_entry_seconds','time_rule_threshold']       }, // Min kalan | Max kalan
       { pair: ['min_move_delta',     'max_slippage_pct']        }, // Fiyat hareketi | Max spread
     ],
   },
