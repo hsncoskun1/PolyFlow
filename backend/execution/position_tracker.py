@@ -112,26 +112,30 @@ def open_position(
     )
     _positions[trade_id] = pos
 
-    # DB'ye kaydet (mevcut positions tablosuna uyumlu)
+    # DB'ye kaydet — tüm alanlar dahil
     try:
         db.save_position({
-            "id":           trade_id,
-            "asset":        event_key.split("_")[0],
-            "event_key":    event_key,
-            "event_slug":   event_slug,
-            "side":         side,
-            "entry_price":  entry_actual,
+            "id":            trade_id,
+            "asset":         event_key.split("_")[0],
+            "event_key":     event_key,
+            "event_slug":    event_slug,
+            "side":          side,
+            "entry_price":   entry_actual,
             "current_price": entry_actual,
-            "target_price": exit_target,
-            "stop_loss":    stop_loss_price,
-            "amount":       amount,
-            "pnl":          0.0,
-            "status":       "OPEN",
-            "mode":         mode,
-            "entry_time":   pos.created_at,
+            "target_price":  exit_target,
+            "stop_loss":     stop_loss_price,
+            "amount":        amount,
+            "shares":        pos.shares,
+            "pnl":           0.0,
+            "status":        "OPEN",
+            "mode":          mode,
+            "order_id":      pos.order_id,
+            "fill_confirmed": pos.fill_confirmed,
+            "condition_id":  condition_id,
+            "entry_time":    pos.created_at,
         })
     except Exception as e:
-        logger.error(f"open_position DB kayıt hatası [{trade_id}]: {e}")
+        logger.error(f"open_position DB kayit hatasi [{trade_id}]: {e}")
 
     sym = event_key.split("_")[0]
     logger.info(
@@ -218,10 +222,14 @@ def close_position(
 
 
 def _reason_to_status(reason: str) -> TradeStatus:
+    # Not: close_position(reason="SL"/"FORCE_SELL") çağrıldığında pozisyon
+    # artık satılmış demektir → terminal durum CLOSED olmalı.
+    # STOP_LOSS/FORCE_SELL marker'ları mark_stop_loss/mark_force_sell
+    # tarafından (satış öncesi) set edilir.
     m = {
         "TP":               TradeStatus.CLOSED,
-        "SL":               TradeStatus.STOP_LOSS,
-        "FORCE_SELL":       TradeStatus.FORCE_SELL,
+        "SL":               TradeStatus.CLOSED,       # satıldı — terminal
+        "FORCE_SELL":       TradeStatus.CLOSED,       # satıldı — terminal
         "HOLD_TO_RESOLUTION": TradeStatus.HOLD_TO_RESOLUTION,
         "MANUAL":           TradeStatus.CLOSED,
         "STALE_EVENT":      TradeStatus.CLOSED,
@@ -265,13 +273,19 @@ def load_open_positions_from_db():
             trade_id = row.get("id", "")
             if not trade_id or trade_id in _positions:
                 continue
+
+            # DB'den shares değerini al; yoksa amount/entry'den hesapla
+            db_shares = row.get("shares", 0) or 0
+            entry_actual = row.get("entry_price", 0)
+
             pos = PositionState(
                 trade_id=trade_id,
                 event_key=row.get("event_key", ""),
                 event_slug=row.get("event_slug", ""),
+                condition_id=row.get("condition_id", ""),
                 side=row.get("side", "UP"),
-                entry_price=row.get("entry_price", 0),
-                entry_actual=row.get("entry_price", 0),
+                entry_price=entry_actual,
+                entry_actual=entry_actual,
                 exit_target=row.get("target_price", 0),
                 stop_loss_price=row.get("stop_loss", 0),
                 amount=row.get("amount", 0),
@@ -280,11 +294,34 @@ def load_open_positions_from_db():
                 trade_status=TradeStatus.OPEN,
                 mode=row.get("mode", "LIVE"),
                 created_at=row.get("created_at", ""),
+                # Fill confirmation fields — DB'den geri yükle
+                order_id=row.get("order_id", ""),
+                fill_confirmed=bool(row.get("fill_confirmed", 0)),
             )
-            pos.shares = round(pos.amount / pos.entry_actual, 6) if pos.entry_actual > 0 else 0
+            # shares: DB'den mi hesaplamadan mı?
+            if db_shares > 0:
+                pos.shares = db_shares
+            elif entry_actual > 0:
+                pos.shares = round(pos.amount / entry_actual, 6)
+            else:
+                pos.shares = 0
+
             _positions[trade_id] = pos
+
+            # Duplicate entry guard — entry_service lock'unu da koy
+            try:
+                from backend.execution.entry_service import lock_event
+                if pos.event_key:
+                    lock_event(pos.event_key)
+            except Exception:
+                pass
+
         if open_rows:
-            logger.info(f"DB'den {len(open_rows)} açık pozisyon yüklendi")
+            confirmed = sum(1 for r in open_rows if r.get("fill_confirmed", 0))
+            logger.info(
+                f"DB'den {len(open_rows)} acik pozisyon yuklendi "
+                f"({confirmed} fill_confirmed)"
+            )
     except Exception as e:
         logger.error(f"load_open_positions_from_db hata: {e}")
 
@@ -302,19 +339,23 @@ def to_app_state_positions() -> list:
             # Sadece açık/aktif pozisyonları göster
             pass
         result.append({
-            "id":            pos.trade_id,
-            "asset":         pos.event_key.split("_")[0],
-            "event_key":     pos.event_key,
-            "event_slug":    pos.event_slug,
-            "side":          pos.side,
-            "entry_price":   pos.entry_actual,
-            "current_price": pos.current_mark,
-            "target_price":  pos.exit_target,
-            "stop_loss":     pos.stop_loss_price,
-            "pnl":           pos.current_pnl,
-            "amount":        pos.amount,
-            "status":        pos.trade_status.value,
-            "mode":          pos.mode,
-            "created_at":    pos.created_at,
+            "id":             pos.trade_id,
+            "asset":          pos.event_key.split("_")[0],
+            "event_key":      pos.event_key,
+            "event_slug":     pos.event_slug,
+            "side":           pos.side,
+            "entry_price":    pos.entry_actual,
+            "current_price":  pos.current_mark,
+            "target_price":   pos.exit_target,
+            "stop_loss":      pos.stop_loss_price,
+            "pnl":            pos.current_pnl,
+            "amount":         pos.amount,
+            "shares":         pos.shares,
+            "fill_confirmed": pos.fill_confirmed,
+            "order_id":       pos.order_id,
+            "condition_id":   pos.condition_id,
+            "status":         pos.trade_status.value,
+            "mode":           pos.mode,
+            "created_at":     pos.created_at,
         })
     return result

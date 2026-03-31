@@ -1,0 +1,110 @@
+{
+  "timestamp": "2026-03-31T04:33:06.999362",
+  "label": "FAZ_D_PRE_TEST_v2",
+  "settings": {
+    "mode": "LIVE",
+    "port": 8002,
+    "auto_start": false,
+    "notifications_enabled": true,
+    "time_rule_threshold": 90,
+    "min_entry_seconds": 20,
+    "min_entry_price": 0.76,
+    "max_entry_price": 0.97,
+    "min_btc_move_up": 71,
+    "min_btc_move_down": 71,
+    "max_slippage_pct": 0.03,
+    "target_exit_price": 0.9,
+    "stop_loss_price": 0.8,
+    "stop_loss_enabled": true,
+    "force_sell_enabled": true,
+    "force_sell_before_resolution_seconds": 15,
+    "sell_retry_count": 200,
+    "sell_retry_interval": 1,
+    "order_amount": 1.0,
+    "buy_order_type": "MARKET",
+    "sell_order_type": "MARKET",
+    "event_trade_limit": 1,
+    "max_open_positions": 1,
+    "max_total_trades": 1,
+    "one_trade_per_event": true,
+    "auto_claim": true,
+    "target_exit_pct": 20.0,
+    "stop_loss_pct": 15.0,
+    "exit_mode": "NUMERIC",
+    "order_amount_pct": 10.0,
+    "amount_mode": "USD",
+    "btc_price_source": "BINANCE",
+    "theme": "polymarket"
+  },
+  "event_settings": {
+    "BTC_5M": {
+      "order_amount": 1.0,
+      "min_entry_price": 0.2,
+      "max_entry_price": 0.85,
+      "target_exit_price": 0.8,
+      "stop_loss_price": 0.25,
+      "stop_loss_enabled": true,
+      "force_sell_enabled": true,
+      "force_sell_before_resolution_seconds": 30,
+      "time_rule_threshold": 290,
+      "min_entry_seconds": 10,
+      "max_slippage_pct": 3.0,
+      "event_trade_limit": 1,
+      "max_open_positions": 1,
+      "allowed_side": "UP",
+      "strategy_mode": "NUMERIC",
+      "exit_mode": "NUMERIC",
+      "min_move_delta": 5.0
+    }
+  },
+  "open_trades": [],
+  "trade_summary": [
+    {
+      "status": "HOLD_TO_RESOLUTION",
+      "mode": "LIVE",
+      "count": 1,
+      "total_pnl": -20.0
+    },
+    {
+      "status": "SL",
+      "mode": "LIVE",
+      "count": 1,
+      "total_pnl": -0.3357
+    },
+    {
+      "status": "SL",
+      "mode": "PAPER",
+      "count": 5,
+      "total_pnl": 4.2029
+    },
+    {
+      "status": "TP",
+      "mode": "LIVE",
+      "count": 2,
+      "total_pnl": 1.5735999999999999
+    },
+    {
+      "status": "TP",
+      "mode": "PAPER",
+      "count": 3,
+      "total_pnl": 26.028299999999998
+    }
+  ],
+  "bot_state": {
+    "safe_mode": "false"
+  },
+  "audit_log_cols": [
+    "id",
+    "event_key",
+    "decision",
+    "reason",
+    "side",
+    "entry_price",
+    "exit_price",
+    "pnl",
+    "amount",
+    "rules_snapshot",
+    "trade_id",
+    "timestamp"
+  ]
+}

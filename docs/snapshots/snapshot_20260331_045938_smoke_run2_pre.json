@@ -1,0 +1,42 @@
+{
+  "timestamp": "2026-03-31T04:59:38.706950+00:00",
+  "label": "SMOKE_RUN2_PRE",
+  "trade_summary": [
+    {
+      "status": "CLOSED",
+      "mode": "LIVE",
+      "count": 1,
+      "pnl": -0.08
+    },
+    {
+      "status": "HOLD_TO_RESOLUTION",
+      "mode": "LIVE",
+      "count": 1,
+      "pnl": -20.0
+    },
+    {
+      "status": "SL",
+      "mode": "LIVE",
+      "count": 2,
+      "pnl": -0.5926
+    },
+    {
+      "status": "SL",
+      "mode": "PAPER",
+      "count": 5,
+      "pnl": 4.2029
+    },
+    {
+      "status": "TP",
+      "mode": "LIVE",
+      "count": 2,
+      "pnl": 1.5735999999999999
+    },
+    {
+      "status": "TP",
+      "mode": "PAPER",
+      "count": 3,
+      "pnl": 26.028299999999998
+    }
+  ]
+}

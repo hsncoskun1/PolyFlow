@@ -228,6 +228,66 @@ Notification Flow:
 
 ---
 
+---
+
+## v1.7.0 — 2026-03-31 (Faz B Testi: Paper TP/SL döngüsü doğrulandı)
+
+### Kritik Hata Düzeltmeleri (Faz B testinde keşfedildi)
+1. **`execute_sell` PAPER mod eksikliği** — PAPER modda `execute_sell` her zaman `None` döndürüyordu → tüm çıkış girişimleri başarısız, pozisyon HOLD_TO_RESOLUTION'a gidiyordu. Fix: PAPER path eklendi (`return sell_price`).
+2. **`_reason_to_status("SL")` terminal durum hatası** — `close_position(reason="SL")` sonrası durum STOP_LOSS kalıyordu → sell_retry her 100ms'de aynı pozisyonu tekrar satmaya çalışıyordu. Fix: "SL" ve "FORCE_SELL" artık CLOSED döndürüyor.
+3. **`record_price_update` hiç çağrılmıyordu** — stale data guard her entry girişimini `stale_market_data` olarak reddediyordu. Fix: `simulation_tick` içinde her tick'te çağrılıyor.
+4. **`execute_entry` PAPER modu yoktu** — PAPER modda order fill simülasyonu eksikti. Fix: fake `order_id` + `fill_size` üreten PAPER path eklendi.
+5. **Restart sonrası duplicate entry** — `load_open_positions_from_db()` lock set etmiyordu → restart'ta aynı event'e çift giriliyordu. Fix: `lock_event(pos.event_key)` eklendi.
+
+### Test Sonuçları
+| Test | Durum | Kanıt |
+|------|-------|-------|
+| Faz A — Restart Recovery | PASS critical_changes=false | snapshot diff, 8/8 kriter |
+| Faz B1 — Entry/TP döngüsü | PASS critical_changes=false | entry=0.465→exit=0.78 TP, pnl=13.04 |
+| Faz B2 — Entry/SL döngüsü | PASS critical_changes=false | entry=0.495→SL, clean ENTRY→EXIT(SL) zinciri |
+
+### Snapshot Kanıtları (`docs/snapshots/`)
+- `snapshot_20260331_043852_faz_a_restart_oncesi.txt`
+- `snapshot_20260331_043929_faz_a_restart_sonrasi.txt`
+- `snapshot_20260331_044551_faz_b1_oncesi.txt`
+- `snapshot_20260331_045439_faz_b1_tp_sonrasi.txt`
+- `snapshot_20260331_050514_faz_b2_clean_oncesi.txt`
+- `snapshot_20260331_050632_faz_b2_sl_sonrasi.txt`
+
+---
+
+## v1.6.0 — 2026-03-31 (Restart Recovery + Kanıt Altyapısı)
+
+### Yeni Dosyalar
+- **`backend/execution/entry_service.py`** — Fill detayları DB'ye sync edildi: `update_position_fill()` çağrısı eklendi
+- **`backend/storage/db.py`** — `update_position_fill(pos_id, order_id, fill_confirmed, shares)` fonksiyonu
+- **`tests/test_recovery.py`** — 9 test / 27 kontrol: fill recovery, duplicate guard, safe_mode, callback zinciri (27/27 PASS)
+- **`tools/snapshot.py`** — 6 kanıt noktasını tek komutla `docs/snapshots/` altına yazar
+- **`docs/SMOKE_TEST.md`** — $1 canlı test öncesi zorunlu kontrol listesi (Faz A/B/C/D)
+
+### Kritik Düzeltme: DB Sync Zinciri
+Önceki eksiklik: `open_position()` ilk DB kaydı yapıyor, fill detayları (`order_id`, `fill_confirmed`, `shares`) sonradan ekleniyor ama DB güncellenmiyordu.
+
+Artık:
+1. `open_position()` → initial DB kaydı (fill_confirmed=False, shares=tahmini)
+2. `execute_entry()` fill doldurur → `_last_entry_info` side-channel
+3. `entry_service.py` fill inject → **`db.update_position_fill()` DB'yi günceller**
+4. `load_open_positions_from_db()` → restart sonrası tüm alanlar doğru geri yüklenir
+
+### Kanıt Araçları
+```bash
+# Snapshot al
+python tools/snapshot.py --label "restart_oncesi"
+
+# İki snapshot arasındaki farkı gör (alan bazında, yapılandırılmış)
+python tools/diff_snapshots.py --latest 2
+python tools/diff_snapshots.py --label-a restart_oncesi --label-b restart_sonrasi
+```
+
+Diff çıktısı: fill_confirmed, order_id, shares değişimi | yeni audit kararlar | bot_state delta | PnL delta | kritik log satırları.
+
+---
+
 ## Sonraki Versiyon Planı
 
 ### v1.1.0 (Tamamlandı — bkz. yukarıda)

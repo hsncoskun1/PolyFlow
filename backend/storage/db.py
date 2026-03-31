@@ -39,9 +39,13 @@ def init_db():
             target_price REAL DEFAULT 0,
             stop_loss REAL DEFAULT 0,
             amount REAL DEFAULT 0,
+            shares REAL DEFAULT 0,
             pnl REAL DEFAULT 0,
             status TEXT DEFAULT 'OPEN',
             mode TEXT DEFAULT 'PAPER',
+            order_id TEXT DEFAULT '',
+            fill_confirmed INTEGER DEFAULT 0,
+            condition_id TEXT DEFAULT '',
             entry_time TEXT,
             close_time TEXT,
             close_reason TEXT,
@@ -115,6 +119,28 @@ def init_db():
         conn.commit()
     finally:
         conn.close()
+    # Mevcut tabloya eksik kolonları ekle (migration — varsa IGNORE)
+    _migrate_positions_table()
+
+
+def _migrate_positions_table():
+    """positions tablosuna yeni kolonlar ekle (tablo zaten mevcutsa ALTER TABLE)."""
+    migrations = [
+        "ALTER TABLE positions ADD COLUMN shares REAL DEFAULT 0",
+        "ALTER TABLE positions ADD COLUMN order_id TEXT DEFAULT ''",
+        "ALTER TABLE positions ADD COLUMN fill_confirmed INTEGER DEFAULT 0",
+        "ALTER TABLE positions ADD COLUMN condition_id TEXT DEFAULT ''",
+    ]
+    conn = get_conn()
+    try:
+        for sql in migrations:
+            try:
+                conn.execute(sql)
+            except Exception:
+                pass  # Kolon zaten var → ignore
+        conn.commit()
+    finally:
+        conn.close()
 
 
 # ─── Position CRUD ───────────────────────────────────────────────────────────
@@ -125,16 +151,36 @@ def save_position(pos: dict):
         conn.execute("""
             INSERT OR REPLACE INTO positions
             (id, asset, event_key, event_slug, side, entry_price, current_price,
-             target_price, stop_loss, amount, pnl, status, mode, entry_time)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             target_price, stop_loss, amount, shares, pnl, status, mode,
+             order_id, fill_confirmed, condition_id, entry_time)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             pos["id"], pos.get("asset",""), pos.get("event_key",""), pos.get("event_slug",""),
             pos.get("side","UP"), pos.get("entry_price",0), pos.get("current_price",0),
             pos.get("target_price",0), pos.get("stop_loss",0), pos.get("amount",0),
-            pos.get("pnl",0), pos.get("status","OPEN"), pos.get("mode","PAPER"),
-            pos.get("entry_time",""),
+            pos.get("shares",0), pos.get("pnl",0), pos.get("status","OPEN"), pos.get("mode","LIVE"),
+            pos.get("order_id",""), 1 if pos.get("fill_confirmed") else 0,
+            pos.get("condition_id",""), pos.get("entry_time",""),
         ))
         conn.commit()
+    finally:
+        conn.close()
+
+
+def update_position_fill(pos_id: str, order_id: str, fill_confirmed: bool, shares: float):
+    """
+    Fill confirmation sonrası order_id, fill_confirmed ve shares'i güncelle.
+    entry_service.py, open_position()'dan sonra fill detayları alınca çağırır.
+    """
+    conn = get_conn()
+    try:
+        conn.execute(
+            "UPDATE positions SET order_id=?, fill_confirmed=?, shares=? WHERE id=?",
+            (order_id, 1 if fill_confirmed else 0, shares, pos_id),
+        )
+        conn.commit()
+    except Exception as e:
+        logger.error(f"update_position_fill hata [{pos_id}]: {e}")
     finally:
         conn.close()
 

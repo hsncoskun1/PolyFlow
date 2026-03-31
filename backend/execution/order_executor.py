@@ -144,9 +144,21 @@ async def execute_entry(
     Döner: gerçek fill fiyatı (float) veya None (başarısız)
     """
     if mode != "LIVE":
-        # Gelecekte paper mode eklenirse burada simüle edilir
-        logger.warning(f"execute_entry: mode={mode} — sadece LIVE destekleniyor")
-        return None
+        # PAPER mod — gerçek order yok, entry_price'ı simüle fill olarak döndür
+        import uuid as _uuid
+        fake_order_id = f"paper_{_uuid.uuid4().hex[:8]}"
+        # fill_size = USD miktarı (LIVE modla tutarlı — entry_service shares'i
+        # fill_size / actual_price ile hesaplar, dolayısıyla amount gönderilmeli)
+        _last_entry_info[event_key] = {
+            "order_id":  fake_order_id,
+            "fill_size": amount,        # USD — LIVE _parse_fill_size ile aynı birim
+            "status":    "filled",
+        }
+        logger.info(
+            f"execute_entry PAPER [{event_key}]: simüle fill @ {entry_price:.4f} "
+            f"| amount=${amount} | order_id={fake_order_id}"
+        )
+        return entry_price
 
     if not token_id:
         logger.error(f"execute_entry [{event_key}]: token_id boş")
@@ -259,8 +271,12 @@ async def execute_sell(
     Döner: gerçek fill fiyatı veya None
     """
     if mode != "LIVE":
-        logger.warning(f"execute_sell: mode={mode} — sadece LIVE destekleniyor")
-        return None
+        # PAPER mod — gerçek satış yok, sell_price'ı simüle fill olarak döndür
+        logger.info(
+            f"execute_sell PAPER [{trade_id}]: simüle fill @ {sell_price:.4f} "
+            f"| shares={shares} | reason via caller"
+        )
+        return sell_price
 
     if not token_id:
         logger.error(f"execute_sell [{trade_id}]: token_id boş")

@@ -1,0 +1,833 @@
+You are acting as a principal software architect, senior full-stack engineer, trading systems reviewer, and productization auditor.
+
+Repository to audit:
+https://github.com/hsncoskun1/PolyFlow
+
+Your mission is NOT to give shallow feedback.
+Your mission is to deeply inspect the real codebase and produce a professional, production-minded technical audit.
+
+Very important rules:
+
+- Do not give generic advice.
+- Do not give motivational commentary.
+- Do not assume parts work unless you confirm them from code.
+- Do not suggest cosmetic cleanup as if that is enough.
+- Do not treat this as a small hobby project review.
+- Treat this as a serious trading application that may eventually go to production.
+- If something is unclear, say exactly what is unclear and why.
+- If a feature appears partially implemented, distinguish clearly between:
+  implemented,
+  partially wired,
+  stubbed,
+  dead code,
+  duplicated logic,
+  or misleading UI.
+- Do not hide architectural risks.
+- Be brutally precise.
+
+Core context of intended product:
+
+This application is meant to become a serious Polymarket trading platform focused on BTC Up/Down markets across multiple timeframes such as 5m, 15m, 1h, 4h, and 1d.
+The target product direction is:
+- market discovery
+- live data ingestion
+- event-based per-market settings
+- rule evaluation
+- risk controls
+- execution readiness
+- dashboard visibility
+- admin-level controls
+- eventually production-grade deployment
+
+The audit must determine whether the current codebase is actually moving in the right direction for that goal.
+
+What I want from you:
+
+I want a full technical and product audit from A to Z.
+
+You must inspect the repository in depth and produce the output in the exact structure below.
+
+OUTPUT STRUCTURE
+
+1. EXECUTIVE SUMMARY
+
+Give a direct professional verdict:
+- What kind of project is this right now?
+  Example categories:
+  prototype,
+  advanced prototype,
+  MVP,
+  demo dashboard,
+  partially operational trading app,
+  production candidate,
+  or architecturally risky proof-of-concept
+- Is it going in the right direction?
+- What are the biggest strengths?
+- What are the biggest risks?
+- If I continue building on this exact foundation, what is likely to break first?
+
+Be very direct.
+
+2. REPOSITORY STRUCTURE ANALYSIS
+
+Inspect the actual folder and file structure.
+Explain:
+- what each major directory is doing
+- whether responsibilities are properly separated
+- where there is over-centralization
+- whether there are giant files doing too much
+- whether naming is clear or misleading
+- whether code organization matches the product goals
+
+I want you to specifically identify:
+- god files
+- coupled modules
+- hidden runtime dependencies
+- fragile entry points
+- duplicated logic across files
+- dead or abandoned patterns
+- pieces that should become services/modules later
+
+3. BACKEND ARCHITECTURE AUDIT
+
+Inspect backend deeply.
+
+I want you to evaluate:
+- API structure
+- runtime loop design
+- websocket handling
+- state management
+- market discovery logic
+- rule evaluation flow
+- simulation logic
+- broadcast/update flow
+- config handling
+- persistence/storage design
+- safety of async patterns
+- separation between market data, strategy, risk, execution, and persistence
+- whether the backend is structured like a real trading backend or just a dashboard server
+
+Answer explicitly:
+- What is currently mixed together that must be separated?
+- What services/modules should exist but currently do not?
+- Which parts are too tightly coupled?
+- Which parts are hard to test?
+- Which parts would become dangerous in real money trading?
+- Where would race conditions, stale state, blocking operations, or inconsistent state likely happen?
+- Is the current database/storage approach appropriate for the current stage?
+- Is it appropriate for production later?
+- If not, explain exactly why.
+
+4. FRONTEND + UI/UX ARCHITECTURE AUDIT
+
+Inspect frontend deeply.
+
+I want you to evaluate:
+- UI structure
+- state flow
+- rendering logic
+- websocket/data binding
+- whether frontend is receiving authoritative data correctly
+- whether there is duplicated business logic in the frontend
+- whether frontend is directly talking to third-party feeds when backend should own the truth
+- whether pages, panels, cards, filters, tabs, modals, and settings are logically organized
+- whether the UI is operationally clear for a trading product
+
+Be precise about:
+- which UI elements are useful
+- which UI elements are misleading
+- which settings are not fully wired
+- which indicators should exist but do not
+- which controls should be moved
+- which views should be split into separate surfaces
+
+I want you to analyze from both:
+- regular user perspective
+- admin/operator perspective
+
+Then propose a professional UI information architecture.
+
+5. INTEGRATION / WIRING AUDIT
+
+This is extremely important.
+
+I want you to inspect whether the UI is truly connected to the backend and whether backend flows are truly connected to underlying logic.
+
+For every major visible feature or control you inspect, classify it as one of the following:
+- fully wired
+- partially wired
+- UI only
+- backend only
+- misleading
+- dead path
+- unclear from repository
+
+Examples of things to inspect:
+- settings save/load
+- asset/event specific overrides
+- filters
+- tabs
+- live market cards
+- wallet/config actions
+- connection indicators
+- strategy/rule controls
+- anything related to simulation
+- anything that looks like execution preparation
+- websocket indicators
+- risk-related controls
+- pages/modals/buttons that suggest functionality
+
+I do not want vague statements like “seems connected.”
+I want evidence-based classification.
+
+6. TRADING SYSTEM READINESS AUDIT
+
+Evaluate the codebase specifically as a future Polymarket trading system.
+
+I want a professional assessment of whether the current code structure is compatible with eventually supporting:
+- market discovery
+- per-event configuration
+- live order book usage
+- price normalization
+- rule engine expansion
+- risk engine separation
+- execution engine
+- order lifecycle tracking
+- fill reconciliation
+- kill switch
+- stale-feed protection
+- no-trade safety mode
+- proper trading telemetry
+- production auditability
+
+For each of the above, state:
+- current status
+- what exists already
+- what is missing
+- what architectural changes are required
+
+7. PRODUCTION READINESS VERDICT
+
+Give a blunt assessment of whether this codebase is currently:
+- safe for demo only
+- safe for simulation only
+- safe for limited internal alpha
+- not safe for any trading usage
+- potentially recoverable into production shape
+- should be partially rewritten
+- should be heavily refactored before more features are added
+
+Then explain:
+- if I keep adding new features now without refactoring, what debt will explode
+- which layer should be stabilized first
+- what minimum standard must be reached before I even think about real order execution
+
+8. TOP PRIORITY ISSUES
+
+List the most important issues in strict priority order.
+
+For each issue include:
+- title
+- severity: critical / high / medium / low
+- affected files/modules
+- why it matters
+- what could go wrong if ignored
+- recommended fix direction
+
+Do not flood with trivialities.
+Prioritize like a real staff engineer.
+
+9. REFACTOR PLAN
+
+Give me a phased refactor plan.
+
+Important:
+Do NOT suggest random rewrites.
+Preserve what is worth preserving.
+Refactor strategically.
+
+I want phases such as:
+- Phase 1: stabilize architecture
+- Phase 2: separate services
+- Phase 3: normalize data flow
+- Phase 4: clean UI wiring
+- Phase 5: prepare execution-safe backend
+- Phase 6: production hardening
+
+For each phase include:
+- goal
+- files/modules likely impacted
+- what to move/split/rewrite
+- what to defer
+- expected benefit
+- risk level
+
+10. TARGET ARCHITECTURE PROPOSAL
+
+Based on the actual current codebase and intended future direction, propose the correct target architecture.
+
+This must include:
+- backend module/service layout
+- frontend surface layout
+- authoritative data flow
+- storage responsibilities
+- config hierarchy
+- market data ownership
+- strategy/risk/execution separation
+- admin vs user UI boundaries
+- health/reconciliation/telemetry concepts
+
+Keep this practical and directly relevant to this repository.
+Do not give generic enterprise diagrams detached from the code.
+
+11. FILE-BY-FILE ACTION MAP
+
+Give me a practical action map for the most important files.
+
+For each important file:
+- what it currently does
+- whether it should stay, split, move, or be deleted
+- what new responsibility boundary it should have
+- whether it is safe to build on further right now
+
+12. UI IMPROVEMENT PLAN
+
+Give a professional UI/UX improvement plan specifically for a trading dashboard product.
+
+I want you to propose:
+- what should be on the main dashboard
+- what should be on event detail view
+- what should be on admin/config pages
+- what operational status indicators are missing
+- what decision trace / audit panels should exist
+- what is visually noisy vs operationally valuable
+- what should be simplified for user mode
+- what should be exposed only in admin mode
+
+13. FINAL VERDICT
+
+End with a blunt final verdict in this format:
+
+- Current maturity level:
+- Main architectural problem:
+- Main UI/product problem:
+- Best existing foundation worth keeping:
+- Most dangerous illusion in the current codebase:
+- Am I on the right path?
+- Should I continue on this foundation or refactor first?
+- One-sentence principal recommendation:
+
+AUDIT STYLE REQUIREMENTS
+
+- Be concrete.
+- Reference real files and real code behavior.
+- Distinguish clearly between confirmed findings and probable findings.
+- If you infer something, label it as inference.
+- Do not be polite at the expense of clarity.
+- Do not summarize too You are acting as a principal software architect, senior full-stack engineer, trading systems reviewer, and productization auditor.
+
+Repository to audit:
+https://github.com/hsncoskun1/PolyFlow
+
+Your mission is NOT to give shallow feedback.
+Your mission is to deeply inspect the real codebase and produce a professional, production-minded technical audit.
+
+Very important rules:
+
+- Do not give generic advice.
+- Do not give motivational commentary.
+- Do not assume parts work unless you confirm them from code.
+- Do not suggest cosmetic cleanup as if that is enough.
+- Do not treat this as a small hobby project review.
+- Treat this as a serious trading application that may eventually go to production.
+- If something is unclear, say exactly what is unclear and why.
+- If a feature appears partially implemented, distinguish clearly between:
+  implemented,
+  partially wired,
+  stubbed,
+  dead code,
+  duplicated logic,
+  or misleading UI.
+- Do not hide architectural risks.
+- Be brutally precise.
+
+Core context of intended product:
+
+This application is meant to become a serious Polymarket trading platform focused on BTC Up/Down markets across multiple timeframes such as 5m, 15m, 1h, 4h, and 1d.
+The target product direction is:
+- market discovery
+- live data ingestion
+- event-based per-market settings
+- rule evaluation
+- risk controls
+- execution readiness
+- dashboard visibility
+- admin-level controls
+- eventually production-grade deployment
+
+The audit must determine whether the current codebase is actually moving in the right direction for that goal.
+
+What I want from you:
+
+I want a full technical and product audit from A to Z.
+
+You must inspect the repository in depth and produce the output in the exact structure below.
+
+OUTPUT STRUCTURE
+
+1. EXECUTIVE SUMMARY
+
+Give a direct professional verdict:
+- What kind of project is this right now?
+  Example categories:
+  prototype,
+  advanced prototype,
+  MVP,
+  demo dashboard,
+  partially operational trading app,
+  production candidate,
+  or architecturally risky proof-of-concept
+- Is it going in the right direction?
+- What are the biggest strengths?
+- What are the biggest risks?
+- If I continue building on this exact foundation, what is likely to break first?
+
+Be very direct.
+
+2. REPOSITORY STRUCTURE ANALYSIS
+
+Inspect the actual folder and file structure.
+Explain:
+- what each major directory is doing
+- whether responsibilities are properly separated
+- where there is over-centralization
+- whether there are giant files doing too much
+- whether naming is clear or misleading
+- whether code organization matches the product goals
+
+I want you to specifically identify:
+- god files
+- coupled modules
+- hidden runtime dependencies
+- fragile entry points
+- duplicated logic across files
+- dead or abandoned patterns
+- pieces that should become services/modules later
+
+3. BACKEND ARCHITECTURE AUDIT
+
+Inspect backend deeply.
+
+I want you to evaluate:
+- API structure
+- runtime loop design
+- websocket handling
+- state management
+- market discovery logic
+- rule evaluation flow
+- simulation logic
+- broadcast/update flow
+- config handling
+- persistence/storage design
+- safety of async patterns
+- separation between market data, strategy, risk, execution, and persistence
+- whether the backend is structured like a real trading backend or just a dashboard server
+
+Answer explicitly:
+- What is currently mixed together that must be separated?
+- What services/modules should exist but currently do not?
+- Which parts are too tightly coupled?
+- Which parts are hard to test?
+- Which parts would become dangerous in real money trading?
+- Where would race conditions, stale state, blocking operations, or inconsistent state likely happen?
+- Is the current database/storage approach appropriate for the current stage?
+- Is it appropriate for production later?
+- If not, explain exactly why.
+
+4. FRONTEND + UI/UX ARCHITECTURE AUDIT
+
+Inspect frontend deeply.
+
+I want you to evaluate:
+- UI structure
+- state flow
+- rendering logic
+- websocket/data binding
+- whether frontend is receiving authoritative data correctly
+- whether there is duplicated business logic in the frontend
+- whether frontend is directly talking to third-party feeds when backend should own the truth
+- whether pages, panels, cards, filters, tabs, modals, and settings are logically organized
+- whether the UI is operationally clear for a trading product
+
+Be precise about:
+- which UI elements are useful
+- which UI elements are misleading
+- which settings are not fully wired
+- which indicators should exist but do not
+- which controls should be moved
+- which views should be split into separate surfaces
+
+I want you to analyze from both:
+- regular user perspective
+- admin/operator perspective
+
+Then propose a professional UI information architecture.
+
+5. INTEGRATION / WIRING AUDIT
+
+This is extremely important.
+
+I want you to inspect whether the UI is truly connected to the backend and whether backend flows are truly connected to underlying logic.
+
+For every major visible feature or control you inspect, classify it as one of the following:
+- fully wired
+- partially wired
+- UI only
+- backend only
+- misleading
+- dead path
+- unclear from repository
+
+Examples of things to inspect:
+- settings save/load
+- asset/event specific overrides
+- filters
+- tabs
+- live market cards
+- wallet/config actions
+- connection indicators
+- strategy/rule controls
+- anything related to simulation
+- anything that looks like execution preparation
+- websocket indicators
+- risk-related controls
+- pages/modals/buttons that suggest functionality
+
+I do not want vague statements like “seems connected.”
+I want evidence-based classification.
+
+6. TRADING SYSTEM READINESS AUDIT
+
+Evaluate the codebase specifically as a future Polymarket trading system.
+
+I want a professional assessment of whether the current code structure is compatible with eventually supporting:
+- market discovery
+- per-event configuration
+- live order book usage
+- price normalization
+- rule engine expansion
+- risk engine separation
+- execution engine
+- order lifecycle tracking
+- fill reconciliation
+- kill switch
+- stale-feed protection
+- no-trade safety mode
+- proper trading telemetry
+- production auditability
+
+For each of the above, state:
+- current status
+- what exists already
+- what is missing
+- what architectural changes are required
+
+7. PRODUCTION READINESS VERDICT
+
+Give a blunt assessment of whether this codebase is currently:
+- safe for demo only
+- safe for simulation only
+- safe for limited internal alpha
+- not safe for any trading usage
+- potentially recoverable into production shape
+- should be partially rewritten
+- should be heavily refactored before more features are added
+
+Then explain:
+- if I keep adding new features now without refactoring, what debt will explode
+- which layer should be stabilized first
+- what minimum standard must be reached before I even think about real order execution
+
+8. TOP PRIORITY ISSUES
+
+List the most important issues in strict priority order.
+
+For each issue include:
+- title
+- severity: critical / high / medium / low
+- affected files/modules
+- why it matters
+- what could go wrong if ignored
+- recommended fix direction
+
+Do not flood with trivialities.
+Prioritize like a real staff engineer.
+
+9. REFACTOR PLAN
+
+Give me a phased refactor plan.
+
+Important:
+Do NOT suggest random rewrites.
+Preserve what is worth preserving.
+Refactor strategically.
+
+I want phases such as:
+- Phase 1: stabilize architecture
+- Phase 2: separate services
+- Phase 3: normalize data flow
+- Phase 4: clean UI wiring
+- Phase 5: prepare execution-safe backend
+- Phase 6: production hardening
+
+For each phase include:
+- goal
+- files/modules likely impacted
+- what to move/split/rewrite
+- what to defer
+- expected benefit
+- risk level
+
+10. TARGET ARCHITECTURE PROPOSAL
+
+Based on the actual current codebase and intended future direction, propose the correct target architecture.
+
+This must include:
+- backend module/service layout
+- frontend surface layout
+- authoritative data flow
+- storage responsibilities
+- config hierarchy
+- market data ownership
+- strategy/risk/execution separation
+- admin vs user UI boundaries
+- health/reconciliation/telemetry concepts
+
+Keep this practical and directly relevant to this repository.
+Do not give generic enterprise diagrams detached from the code.
+
+11. FILE-BY-FILE ACTION MAP
+
+Give me a practical action map for the most important files.
+
+For each important file:
+- what it currently does
+- whether it should stay, split, move, or be deleted
+- what new responsibility boundary it should have
+- whether it is safe to build on further right now
+
+12. UI IMPROVEMENT PLAN
+
+Give a professional UI/UX improvement plan specifically for a trading dashboard product.
+
+I want you to propose:
+- what should be on the main dashboard
+- what should be on event detail view
+- what should be on admin/config pages
+- what operational status indicators are missing
+- what decision trace / audit panels should exist
+- what is visually noisy vs operationally valuable
+- what should be simplified for user mode
+- what should be exposed only in admin mode
+
+13. FINAL VERDICT
+
+End with a blunt final verdict in this format:
+
+- Current maturity level:
+- Main architectural problem:
+- Main UI/product problem:
+- Best existing foundation worth keeping:
+- Most dangerous illusion in the current codebase:
+- Am I on the right path?
+- Should I continue on this foundation or refactor first?
+- One-sentence principal recommendation:
+
+AUDIT STYLE REQUIREMENTS
+
+- Be concrete.
+- Reference real files and real code behavior.
+- Distinguish clearly between confirmed findings and probable findings.
+- If you infer something, label it as inference.
+- Do not be polite at the expense of clarity.
+- Do not summarize too early.
+- Think like you are preparing a codebase for a serious product team and possible live money risk.
+- Do not output fluffy prose.
+- Do not give me a beginner explanation.
+- Give me a senior-level audit.
+
+FINAL IMPORTANT INSTRUCTION
+
+After the audit, add a separate section called:
+
+14. IMPLEMENTATION ORDER
+
+In this section, tell me exactly in what order I should tackle the work next.
+This must be actionable and chronological.
+Not vague.
+Start from the most foundational correction.
+
+Also add:
+
+15. TESTING AND VALIDATION DOCUMENT REQUIREMENT
+
+For every future implementation step, define:
+- what must be tested
+- how it should be validated
+- what evidence should be documented
+- what regression checks are required
+
+This is mandatory because I want all future work and all test results to be documented as the system evolves.early.
+- Think like you are preparing a codebase for a serious product team and possible live money risk.
+- Do not output fluffy prose.
+- Do not give me a beginner explanation.
+- Give me a senior-level audit.
+
+FINAL IMPORTANT INSTRUCTION
+
+After the audit, add a separate section called:
+
+14. IMPLEMENTATION ORDER
+
+In this section, tell me exactly in what order I should tackle the work next.
+This must be actionable and chronological.
+Not vague.
+Start from the most foundational correction.
+
+Also add:
+
+15. TESTING AND VALIDATION DOCUMENT REQUIREMENT
+
+For every future implementation step, define:
+- what must be tested
+- how it should be validated
+- what evidence should be documented
+- what regression checks are required
+
+This is mandatory because I want all future work and all test results to be documented as the system evolves.
+
+
+
+Evet, doğru uygularsan anlık veri çekme hızı kötüleşmek zorunda değil. Hatta çoğu durumda daha stabil ve daha “gerçek zamanlı hissedilen” hale gelir.
+
+Asıl ayrım şu:
+
+Hız ile karmaşıklık aynı şey değil.
+Şu anda sistem bazı yerlerde hızlı görünüyor olabilir çünkü frontend de veri çekiyor, backend de veri çekiyor, bazı hesaplar da aynı yerde dönüyor. Bu bazen hızlı hissettirir ama gerçekte tutarsız state, sıçrayan fiyat, çift işleme ve yanlış karar riski üretir.
+
+Doğru mimari kurulduğunda hız kaybı yaşaman gerekmez; sadece veri akışının sahibi netleşir.
+
+Doğru yapı şöyle olmalı:
+
+* Polymarket live websocket verisini backend alır
+* backend bunu normalize eder
+* frontend’e hafif, özet, hazır state yollar
+* frontend ham veri işlemek yerine render yapar
+
+Bu yapı genelde daha iyidir çünkü:
+
+* browser tarafındaki gereksiz yük azalır
+* aynı veri iki yerde ayrı ayrı parse edilmez
+* trade motoru ile UI aynı veriye bakar
+* reconnect, stale data, tick size, event sırası gibi şeyleri tek yerde yönetirsin
+
+Yani “mimariyi düzeltmek = veri yavaşlar” diye bir kural yok.
+Yanlış yapılırsa yavaşlar.
+Doğru yapılırsa çoğu zaman daha iyi olur.
+
+Anlık hızın korunması için dikkat etmen gerekenler:
+
+Birincisi, market data katmanını ayır ama ağırlaştırma.
+Websocket consumer çok hafif olmalı. Gelen mesajı alıp:
+
+* parse et
+* state güncelle
+* gerekiyorsa küçük diff üret
+* publish et
+
+Burada ağır hesap, DB yazımı, UI formatlama, raporlama aynı thread içinde olmamalı.
+
+İkincisi, her gelen tick’i veritabanına yazma.
+Bu çok kritik.
+Canlı state memory’de veya Redis benzeri hızlı cache’te tutulmalı.
+DB daha çok:
+
+* config
+* order history
+* fills
+* signals
+* audit
+* snapshots
+  için kullanılmalı.
+
+Üçüncüsü, frontend’e ham orderbook spam’i gönderme.
+Frontend’in her şeyi milisaniyelik ham veriyle işlemesine gerek yok.
+Backend içinde full hızda state tut, ama UI’ya örneğin:
+
+* 100 ms
+* 200 ms
+* ya da diff bazlı
+  yayın yap.
+  Kullanıcı bunu yine canlı hisseder.
+
+Dördüncüsü, authoritative state tek yerde olsun.
+Şu an hem frontend hem backend veri çekerse “hızlı” görünür ama aslında senkron bozulur.
+Trading uygulamasında doğru veri, hızlı ama çelişkili veriden daha değerlidir.
+
+Beşincisi, strategy ve execution’ı market data loop’tan ayır.
+En doğru model:
+
+* market feed loop
+* strategy evaluation loop
+* execution loop
+* UI publish loop
+
+ayrı akmalı.
+
+Mesela:
+
+* websocket her mesajı alır
+* state günceller
+* strategy engine bu state’ten okur
+* execution engine ayrı karar verir
+* UI ayrı frekansta yayın alır
+
+Bu yapı hız düşürmez, darboğazı azaltır.
+
+En büyük performans düşüşü hangi hatalarda olur?
+
+* gelen her websocket event’te DB yazmak
+* aynı anda çok fazla JSON serialize etmek
+* frontend’e gereğinden fazla ham veri basmak
+* tek devasa loop içinde her şeyi yapmak
+* blocking kod kullanmak
+* reconnect ve subscription yönetimini ağır yapmak
+
+Bunları yapmazsan hız korunur.
+
+Hatta senin özel durumda büyük ihtimalle şu iyileşir:
+
+* fiyat zıplamaları azalır
+* state daha tutarlı olur
+* UI daha akıcı görünür
+* backend kararları daha güvenilir olur
+* debug etmek kolaylaşır
+* çoklu timeframe yönetimi daha rahat olur
+
+Kısacası:
+
+Evet, talimatları uygularsan botun anlık veri çekme performansı iyi kalabilir.
+Doğru uygularsan sadece iyi kalmaz, daha kararlı ve profesyonel hale gelir.
+Kötü etkileyecek şey modülerleşme değil; yanlış yerde gereksiz iş yapmak olur.
+
+Sana net bir kural vereyim:
+
+* live market state = memory/cache
+* persistent audit/order/fill data = database
+* raw websocket ownership = backend
+* rendering = frontend
+* execution decision = backend only
+
+Bu çizgiyi korursan hem hız hem doğruluk birlikte kalır.
+
+

@@ -1,0 +1,794 @@
+Bu tip bir botu en baştan doğru kurmak için hedef şu olmalı:
+
+Tek bir “her şeyi yapan script” yazmamak.
+Bunun yerine sistemi 8 ayrı katmana bölmek:
+
+* market discovery
+* market registry
+* live data ingestion
+* strategy engine
+* risk engine
+* execution engine
+* portfolio/order sync
+* admin UI + user UI
+
+Böyle kurarsan 5m, 15m, 1h, 4h, 1d tüm Up/Down eventlerini takip eder ama sadece kullanıcı hangi eventleri aktif ettiyse oralarda işlem açarsın.
+
+Polymarket tarafında event, market ve token ayrımı var; bir event birden fazla market içerebilir, her binary market da Yes ve No olmak üzere iki outcome token üretir. Canlı veri için `market` ve `user` websocket kanalları var; orderbook, trade ve kişisel order activity gerçek zamanlı akıyor. Aktif marketleri çekmek için events/markets endpoint’leri paginated çalışıyor ve events endpoint’i tüm aktif marketleri toplu almak için en verimli yöntem olarak belgeleniyor. ([Polymarket Documentation][1])
+
+Aşağıdaki planı öneririm.
+
+## 1) Önce ürün kararını netleştir
+
+İlk aşamada botun ne yapacağını çok net kilitle:
+
+* Sadece BTC Up/Down marketleri
+* Zaman dilimleri: 5m, 15m, 1h, 4h, 1d
+* Her event ayrı ayar seti
+* Kullanıcı sadece seçtiği eventlerde trade açabilsin
+* Her eventin bağımsız:
+
+  * enable/disable
+  * entry kuralı
+  * max pozisyon
+  * stake
+  * TP/SL
+  * force sell
+  * allowed side
+  * cooldown
+  * trading window
+  * spread limiti
+  * liquidity limiti
+  * slippage limiti
+
+Bu aşamada en önemli karar şu:
+Sistemin merkez nesnesi “event config” olacak, “strategy code” değil.
+
+Yani mantık:
+“5m Up/Down marketinde bu ayarları kullan”
+“1h marketinde başka ayarları kullan”
+
+## 2) Veri modelini en başta doğru kur
+
+En büyük hata burada yapılır. Tek bir `price` veya tek bir `market_state` alanı yetmez.
+
+Ayrı tablolar / modeller kur:
+
+### a) instruments
+
+Her takip edilen market/token için sabit kimlik bilgisi
+
+* event_id
+* market_id / condition_id
+* asset_id
+* outcome (`YES` / `NO`)
+* timeframe (`5m`, `15m`, `1h`, `4h`, `1d`)
+* direction family (`UPDOWN`)
+* title / slug
+* active
+* tick_size
+* min_order_size
+* end_time
+* resolved
+
+Tick size market bazında önemlidir; yanlış tick size ile emir reddedilir. Tick size değişimi websocket’te de gelebilir ve botlar için kritik olduğu açıkça belirtilmiş. ([Polymarket Documentation][2])
+
+### b) event_configs
+
+Kullanıcının her event için yaptığı ayarlar
+
+* instrument_group_id veya timeframe key
+* enabled
+* allowed_side (`UP_ONLY`, `DOWN_ONLY`, `BOTH`)
+* base_order_size_usd
+* max_open_positions
+* max_daily_trades
+* entry_prob_min
+* entry_prob_max
+* spread_max
+* min_book_depth
+* min_volume
+* cooldown_seconds
+* tp_mode
+* tp_value
+* sl_mode
+* sl_value
+* force_sell_enabled
+* force_sell_time_left_sec
+* force_sell_loss_threshold
+* cancel_on_disconnect
+* strategy_profile_id
+
+### c) live_market_state
+
+Sadece canlı state
+
+* best_bid
+* best_ask
+* midpoint
+* spread
+* last_trade_price
+* last_trade_side
+* top bid depth
+* top ask depth
+* last_seq
+* ws_connected
+* staleness_ms
+
+### d) orders
+
+Botun verdiği emirler
+
+* local_order_id
+* clob_order_id
+* instrument_id
+* side
+* price
+* size
+* status
+* created_at
+* filled_size
+* remaining_size
+
+### e) positions
+
+Açık pozisyonlar
+
+* instrument_id
+* outcome side
+* avg_entry
+* qty
+* notional
+* realized_pnl
+* unrealized_pnl
+
+### f) executions / fills
+
+Her fill ayrı kayıt
+
+### g) signals
+
+Strateji neden trade açmak istedi, audit için
+
+* rule_set
+* trigger snapshot
+* score
+* reason
+
+Bu ayrım olmadan bir süre sonra “neden trade açtı” veya “neden 22-82 zıpladı” sorularını cevaplayamazsın.
+
+## 3) Market discovery katmanını yaz
+
+Bot açıldığında tüm aktif BTC Up/Down marketlerini bulmalı. Bunu hardcoded linklerle değil discovery ile yap.
+
+Akış:
+
+* Events endpoint’ten aktif marketleri çek
+* Sadece BTC ile ilgili olanları filtrele
+* Sadece Up/Down ve hedef timeframe’leri ayıkla
+* Her marketin Yes/No token’larını çıkar
+* `instruments` tablosunu güncelle
+* yeni market geldiyse ekle
+* resolved/expired olanı pasife çek
+
+Polymarket docs’a göre markets/events verisini slug, tags veya events endpoint üzerinden çekebilirsin; tüm aktif marketleri toplu keşif için events endpoint öneriliyor. Token ID’ler de Gamma API markets/events yanıtlarındaki `tokens` alanından bulunabiliyor. ([Polymarket Documentation][3])
+
+Burada regex tabanlı parser kur:
+başlıktan timeframe çıkar:
+
+* “5m”
+* “15m”
+* “1h”
+* “4h”
+* “1d”
+
+Aynı zamanda direction parser kur:
+
+* up
+* down
+* higher
+* lower
+
+Ama canlı trade mantığında kullanıcıya event’i “tek market” gibi göster, token detayı arka planda kalsın.
+
+## 4) Registry servisi kur
+
+Discovery ile gelen marketleri bir registry’de normalize et.
+
+Örnek registry çıktısı:
+
+```json
+{
+  "BTC_5M_UPDOWN": {
+    "event_id": "...",
+    "timeframe": "5m",
+    "markets": [
+      {
+        "market_id": "...",
+        "yes_asset_id": "...",
+        "no_asset_id": "...",
+        "end_time": "..."
+      }
+    ],
+    "active_market_id": "..."
+  }
+}
+```
+
+Bu servis şunu çözer:
+Kullanıcı “5m açık” dediğinde execution engine hangi asset_id ile konuşacağını registry’den bilir.
+
+Bu katman olmazsa UI’daki ayar ile websocket asset mapping birbirine dolaşır.
+
+## 5) Live data ingestion katmanını ayrı servis yap
+
+Canlı veri için polling değil websocket kullan. Polymarket market channel gerçek zamanlı orderbook snapshot, price changes ve trade executions akıtıyor. Personal fills ve order activity için user channel kullanılmalı. ([Polymarket Documentation][4])
+
+Bu servisin görevleri:
+
+* market websocket’e bağlan
+* aktif instrument asset_id listesiyle subscribe ol
+* snapshot al
+* delta uygula
+* tick_size_change yakala
+* trade event yakala
+* user channel’dan fill/open/cancel/reject al
+* her asset için state güncelle
+* stale data tespiti yap
+* reconnect ve resubscribe yap
+
+Önemli:
+Market websocket’ten gelen her şeyi tek state’e yazma. Ayrı tut:
+
+* book state
+* last trade state
+* price change state
+* tick size state
+
+Bu katman sadece veri toplar. Trade kararı vermez.
+
+## 6) Strategy engine’i event bazlı ama ortak framework ile kur
+
+Strateji motoru tek bir kurala bakmamalı. Event bazlı config okuyan bir framework olmalı.
+
+Mimari:
+
+* global scheduler
+* instrument evaluator
+* signal generator
+* decision scorer
+
+Her tick / update geldiğinde akış:
+
+* bu instrument için config enabled mi?
+* timeframe’in aktif marketi açık mı?
+* veri taze mi?
+* spread uygun mu?
+* likidite yeterli mi?
+* açık order var mı?
+* açık pozisyon limiti dolu mu?
+* cooldown var mı?
+* sonra strategy profile çalışsın
+
+Örnek strategy profile’lar:
+
+* threshold entry
+* last-second momentum
+* reversal filter
+* breakout confirm
+* orderbook imbalance
+* no-trade zone
+
+Bu sayede 5m için ayrı, 1d için ayrı logic seçebilirsin ama hepsi aynı framework içinde çalışır.
+
+## 7) Risk engine’i strategy’den ayır
+
+Bu en kritik konu. Strateji “girmek istiyorum” der. Risk engine “girilebilir” derse emir gider.
+
+Risk engine kuralları:
+
+* günlük toplam zarar limiti
+* timeframe başına max açık pozisyon
+* total exposure limiti
+* aynı anda hem 5m hem 15m çakışma limiti
+* spread guard
+* stale feed guard
+* disconnect guard
+* market end-time guard
+* duplicate order guard
+* opposite side conflict guard
+* wallet balance guard
+* allowance / tradable balance guard
+
+Polymarket docs, botlar için price guards, size limits, kill switch ve user channel ile fill monitor etme öneriyor. Ayrıca open orders alınabiliyor, cancel-all ve market bazlı cancel destekleniyor. ([Polymarket Documentation][5])
+
+Benim önerim:
+Risk engine ayrı servis olsun ve “approval object” dönsün:
+
+```json
+{
+  "approved": false,
+  "reasons": ["spread_too_wide", "cooldown_active"]
+}
+```
+
+Bu yapı audit için çok güçlü olur.
+
+## 8) Execution engine’i profesyonel kur
+
+Emir gönderme kısmı ayrı olmalı.
+
+Execution engine görevleri:
+
+* referans fiyat seç
+* tick size’a yuvarla
+* emir boyutunu hesapla
+* order payload oluştur
+* sign et
+* gönder
+* ack bekle
+* user channel ile fill takibi yap
+* time-in-force yönet
+* stale order cancel et
+* partial fill yönet
+* cancel-replace yap
+
+Polymarket’te order creation offchain olur, matching operator üzerinden ilerler ve settlement onchain’e gider; bu hibrit lifecycle nedeniyle bot tarafında ack/fill/cancel akışını doğru takip etmek gerekir. L2 CLOB authentication HMAC-SHA256 ile yapılır; user open orders, balances ve signed order posting bu auth ile çalışır. ([Polymarket Documentation][6])
+
+Execution engine içinde şu alt modüller olsun:
+
+* price normalizer
+* size calculator
+* signer/auth client
+* order submitter
+* cancel manager
+* fill reconciler
+
+## 9) Portfolio ve reconciliation servisi kur
+
+Sadece websocket’e güvenme. Düzenli reconciliation şart.
+
+Periyodik olarak:
+
+* open orders çek
+* current positions çek
+* fills/trades çek
+* local DB ile karşılaştır
+* sapma varsa düzelt
+
+Polymarket’te open orders ve current positions endpoint’leri var; user orders paginated dönüyor. Bu yüzden özellikle reconnect veya websocket kopması sonrasında tam senkronizasyon katmanı şart. ([Polymarket Documentation][7])
+
+Bu servis şu hataları çözer:
+
+* websocket event kaçtı
+* partial fill geldi ama local state güncellenmedi
+* cancel ack kaçtı
+* order rejected oldu ama local pending kaldı
+
+## 10) UI’ı iki katmanlı tasarla
+
+Senin senaryonda bu çok önemli.
+
+### A) Normal kullanıcı paneli
+
+Basit olmalı
+
+Sekmeler:
+
+* Dashboard
+* Events
+* Positions
+* Orders
+* Trades
+* Risk
+* Logs
+
+#### Events sayfası
+
+Her timeframe için kart:
+
+* BTC 5m
+* BTC 15m
+* BTC 1h
+* BTC 4h
+* BTC 1d
+
+Her kartta:
+
+* active/inactive toggle
+* allowed side
+* order size
+* entry threshold
+* max spread
+* cooldown
+* TP / SL
+* force sell
+* max concurrent trades
+
+Kullanıcı sadece bunları görsün.
+
+### B) Admin paneli
+
+Gelişmiş olmalı
+
+* market registry
+* asset_id map
+* websocket status
+* tick size cache
+* raw orderbook viewer
+* raw event stream
+* strategy profiles
+* risk rules
+* exchange/auth health
+* reconciliation status
+* kill switch
+* discovery logs
+
+Bu ayrım çok faydalı olur çünkü normal kullanıcıya asset_id, condition_id, token map gibi karmaşayı göstermen gerekmez.
+
+## 11) Event bazlı ayar modelini doğru tasarla
+
+Her event için bağımsız ayar isteniyorsa config inheritance yap.
+
+Örnek:
+
+### global defaults
+
+* spread max = 0.03
+* cooldown = 20s
+* cancel on disconnect = true
+
+### timeframe template defaults
+
+* 5m için ayrı default
+* 15m için ayrı default
+* 1h için ayrı default
+
+### per-event override
+
+* sadece kullanıcının değiştirdiği alanlar
+
+Böylece 1d event için her şeyi sıfırdan doldurmak gerekmez.
+
+Örnek config:
+
+```json
+{
+  "global": {
+    "cancel_on_disconnect": true,
+    "force_sell_enabled": true
+  },
+  "templates": {
+    "5m": {
+      "entry_prob_min": 0.95,
+      "spread_max": 0.02,
+      "cooldown_seconds": 15
+    },
+    "1d": {
+      "entry_prob_min": 0.85,
+      "spread_max": 0.05,
+      "cooldown_seconds": 300
+    }
+  },
+  "overrides": {
+    "BTC_5M_UPDOWN": {
+      "enabled": true,
+      "base_order_size_usd": 25
+    },
+    "BTC_4H_UPDOWN": {
+      "enabled": false
+    }
+  }
+}
+```
+
+Bu en temiz model olur.
+
+## 12) İşlem açma akışını standartlaştır
+
+Tek bir pipeline kullan:
+
+### a) Discovery
+
+Market bulundu
+
+### b) Registry
+
+Market normalize edildi
+
+### c) Subscription
+
+Asset’lere websocket bağlandı
+
+### d) State update
+
+Book/trade/price state güncellendi
+
+### e) Evaluator
+
+Bu event aktif mi diye bakıldı
+
+### f) Signal
+
+Strateji sinyal üretti
+
+### g) Risk approval
+
+Risk geçti
+
+### h) Order submit
+
+Emir gönderildi
+
+### i) Fill sync
+
+User channel ve reconciliation ile işlendi
+
+### j) Position management
+
+TP/SL/force sell izlendi
+
+### k) Exit
+
+Position kapandı
+
+Bu pipeline’ı her timeframe için aynı tut. Sadece config ve strategy profile değişsin.
+
+## 13) Force sell ve exit sistemi baştan ayrı tasarla
+
+Senin kullanımında bu çok önemli.
+
+Her pozisyon için ayrı exit policy nesnesi olsun:
+
+* take profit
+* stop loss
+* trailing logic
+* time-left exit
+* stale-feed exit
+* opposite signal exit
+* max hold duration
+* emergency kill exit
+
+Özellikle kısa vadeli eventlerde “market kapanışına X saniye kala davranış” ayrı modül olmalı. 5m için başka, 1d için başka olabilir.
+
+## 14) Gözlemleme ve debug altyapısı zorunlu
+
+Bu bot canlı para yöneteceği için log sistemi ilk günden kurulmalı.
+
+Zorunlu log türleri:
+
+* discovery logs
+* websocket connection logs
+* raw event logs
+* normalized market state logs
+* signal logs
+* risk reject logs
+* order submit logs
+* fill logs
+* reconcile correction logs
+* anomaly alerts
+
+Ve UI’da şu paneller olmalı:
+
+* son gelen raw websocket event
+* aktif subscription sayısı
+* stale market sayısı
+* event bazlı last update time
+* pending order sayısı
+* unmatched local order sayısı
+
+## 15) Fail-safe kuralları koy
+
+Canlı botta bunlar şart:
+
+* websocket koparsa yeni trade açma
+* stale data varsa yeni trade açma
+* tick size bilinmiyorsa order yollama
+* user channel yoksa fillsiz trade açma
+* reconcile başarısızsa only-cancel mode
+* balance/allowance okunamazsa no-trade mode
+* kill switch butonu
+* cancel all butonu
+* market bazlı cancel butonu
+
+Polymarket tarafında cancel-all, market bazlı cancel ve çoklu cancel endpoint’leri var; bunları panic controls için kullanmalısın. ([Polymarket Documentation][8])
+
+## 16) Teknoloji seçimi
+
+Ben olsam Python ile şöyle kurarım:
+
+* FastAPI: API + admin/user panel backend
+* asyncio: websocket consumers
+* SQLAlchemy + PostgreSQL: kalıcı state
+* Redis: canlı cache + pub/sub
+* Pydantic: config şemaları
+* APScheduler veya internal task runner: discovery/reconcile işleri
+* React veya server-rendered basit panel: UI
+
+Servis ayrımı:
+
+* `market_discovery_service`
+* `market_registry_service`
+* `market_ws_service`
+* `user_ws_service`
+* `strategy_service`
+* `risk_service`
+* `execution_service`
+* `reconcile_service`
+* `dashboard_api`
+
+## 17) Aşama aşama geliştirme sırası
+
+Bunu bu sırayla yap:
+
+### Faz 1
+
+Sadece discovery + registry
+Amaç:
+5m/15m/1h/4h/1d BTC Up/Down marketlerini otomatik bulup DB’ye yazmak
+
+### Faz 2
+
+Sadece market websocket
+Amaç:
+asset_id bazlı canlı orderbook/trade almak ve state üretmek
+
+### Faz 3
+
+Sadece user websocket + reconciliation
+Amaç:
+open order, fill, cancel akışını doğru görmek
+
+### Faz 4
+
+Read-only dashboard
+Amaç:
+trade açmadan her timeframe state’ini izlemek
+
+### Faz 5
+
+Config engine
+Amaç:
+kullanıcı her event için ayar yapabilsin
+
+### Faz 6
+
+Paper/sim execution layer
+Amaç:
+gerçek emir atmadan sinyal ve sanal PnL görmek
+
+### Faz 7
+
+Real execution with tiny size
+Amaç:
+çok küçük miktarla canlı akış doğrulamak
+
+### Faz 8
+
+Risk hardening
+Amaç:
+kill switch, cancel all, stale guards, exposure caps
+
+### Faz 9
+
+Full production mode
+Amaç:
+çoklu timeframe eşzamanlı ama kontrollü trade
+
+Bu sıraya uyarsan sorunları erken izole edersin.
+
+## 18) Benim önerdiğim klasör yapısı
+
+```text
+app/
+  api/
+    admin_routes.py
+    user_routes.py
+    health_routes.py
+
+  core/
+    config.py
+    enums.py
+    constants.py
+
+  discovery/
+    fetch_active_markets.py
+    parse_btc_updown.py
+    registry_builder.py
+
+  ws/
+    market_consumer.py
+    user_consumer.py
+    heartbeat.py
+    reconnect.py
+
+  state/
+    market_state.py
+    order_state.py
+    position_state.py
+    cache.py
+
+  strategy/
+    evaluator.py
+    profiles/
+      threshold.py
+      momentum.py
+      imbalance.py
+
+  risk/
+    engine.py
+    guards.py
+
+  execution/
+    pricing.py
+    sizing.py
+    submit.py
+    cancel.py
+    reconcile.py
+
+  portfolio/
+    positions.py
+    pnl.py
+    sync.py
+
+  models/
+    db_models.py
+    schemas.py
+
+  services/
+    discovery_service.py
+    registry_service.py
+    strategy_service.py
+    execution_service.py
+
+  ui_contracts/
+    admin_dto.py
+    user_dto.py
+```
+
+## 19) En kritik tasarım kararı
+
+Bence sistemin merkezi şunlardan biri olmalı:
+
+* “market” merkezli değil
+* “asset” merkezli değil
+* “user-configured event slot” merkezli
+
+Yani UI’da kullanıcı şunu yönetmeli:
+
+* BTC 5m
+* BTC 15m
+* BTC 1h
+* BTC 4h
+* BTC 1d
+
+Arka planda sen bunları o anki gerçek Polymarket market/asset ID’lerine bağlamalısın.
+
+Bu yaklaşım en temizidir. Çünkü Polymarket’te marketler ve token’lar teknik kimliktir; kullanıcının görmek istediği şey timeframe bazlı event ayarıdır. Docs’un event/market/token ayrımı da tam olarak bunu destekliyor. ([Polymarket Documentation][1])
+
+## 20) Sana önerdiğim nihai plan cümlesi
+
+Bu bot şu mantıkla kurulmalı:
+
+“Discovery ile aktif BTC Up/Down marketlerini otomatik bulan, bunları timeframe bazlı sabit kullanıcı event slotlarına eşleyen, market/user websocket ile canlı state üreten, her slot için ayrı config çalıştıran, risk motoru onaylamadıkça emir göndermeyen, execution ve reconciliation katmanları ayrılmış bir trading platformu.”
+
+İstersen bir sonraki mesajda bunu doğrudan sana:
+
+* tam sistem mimari şeması
+* veritabanı tabloları
+* admin panel sekmeleri
+* kullanıcı panel sekmeleri
+* FastAPI klasör yapısı
+* geliştirme fazları
+* Claude’a verilecek profesyonel build promptu
+
+olarak tek parça halinde hazırlayayım.
+
+[1]: https://docs.polymarket.com/market-data/overview?utm_source=chatgpt.com "Overview - Polymarket Documentation"
+[2]: https://docs.polymarket.com/trading/orders/create?utm_source=chatgpt.com "Create Order"
+[3]: https://docs.polymarket.com/market-data/fetching-markets?utm_source=chatgpt.com "Fetching Markets"
+[4]: https://docs.polymarket.com/market-data/websocket/market-channel?utm_source=chatgpt.com "Market Channel"
+[5]: https://docs.polymarket.com/market-makers/trading?utm_source=chatgpt.com "Trading"
+[6]: https://docs.polymarket.com/concepts/order-lifecycle?utm_source=chatgpt.com "Order Lifecycle - Polymarket Documentation"
+[7]: https://docs.polymarket.com/api-reference/trade/get-user-orders?utm_source=chatgpt.com "Get user orders"
+[8]: https://docs.polymarket.com/trading/orders/cancel?utm_source=chatgpt.com "Cancel Order"

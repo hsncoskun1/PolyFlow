@@ -203,9 +203,10 @@ async def try_open_position(
             mode=settings.get("mode", "LIVE"),
         )
 
-        # Fill detaylarını pozisyona ekle (order_id + actual_fill_shares)
+        # Fill detaylarını pozisyona ekle (order_id + actual_fill_shares) + DB güncelle
         try:
             from backend.execution.order_executor import get_last_entry_info, clear_entry_info
+            from backend.storage import db
             fi = get_last_entry_info(event_key)
             if fi:
                 pos.order_id = fi.get("order_id", "")
@@ -216,9 +217,16 @@ async def try_open_position(
                     if actual_price > 0:
                         pos.shares = round(fill_sz / actual_price, 6)
                 pos.fill_confirmed = True  # REST response fill sayılır
+                # DB kaydını güncelle — restart recovery için kritik
+                db.update_position_fill(
+                    pos.trade_id,
+                    pos.order_id,
+                    pos.fill_confirmed,
+                    pos.shares,
+                )
                 clear_entry_info(event_key)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(f"Fill detayı DB güncelleme hatası [{event_key}]: {exc}")
 
         logger.info(
             f"Entry başarılı [{event_key}] — {side} @ {actual_price:.4f} | "

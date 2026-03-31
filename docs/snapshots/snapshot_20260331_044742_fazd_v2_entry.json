@@ -1,0 +1,123 @@
+{
+  "timestamp": "2026-03-31T04:47:42.496251+00:00",
+  "label": "FAZ_D_v2_ENTRY",
+  "last_trades": [
+    {
+      "id": "t_pf_2f61204e82",
+      "asset": "BTC",
+      "event_key": "BTC_5M",
+      "event_slug": "btc-updown-5m-1774932300",
+      "side": "UP",
+      "entry_price": 0.72,
+      "exit_price": 0.535,
+      "amount": 1.0,
+      "pnl": -0.2569,
+      "status": "SL",
+      "mode": "LIVE",
+      "date": "2026-03-31T07:47:37.011621",
+      "created_at": "2026-03-31 04:47:37"
+    },
+    {
+      "id": "t_pf_ecdaae0ddd",
+      "asset": "BTC",
+      "event_key": "BTC_5M",
+      "event_slug": "btc-updown-5m-1774931700",
+      "side": "UP",
+      "entry_price": 0.25,
+      "exit_price": 0.23,
+      "amount": 1.0,
+      "pnl": -0.08,
+      "status": "CLOSED",
+      "mode": "LIVE",
+      "date": "2026-03-31T07:36:08.626280",
+      "created_at": "2026-03-31 04:36:08"
+    },
+    {
+      "id": "t_pf_a024d3d83b",
+      "asset": "BTC",
+      "event_key": "BTC_5M",
+      "event_slug": "btc-updown-5m-1774930200",
+      "side": "UP",
+      "entry_price": 0.505,
+      "exit_price": 0.25,
+      "amount": 1.0,
+      "pnl": -0.3357,
+      "status": "SL",
+      "mode": "LIVE",
+      "date": "2026-03-31T07:13:15.357911",
+      "created_at": "2026-03-31 04:13:15"
+    }
+  ],
+  "audit_tail": [
+    [
+      407,
+      "BTC_5M",
+      "EXIT",
+      "SL",
+      "UP",
+      0.72,
+      0.535,
+      -0.2569,
+      1.0,
+      "{}",
+      "pf_2f61204e82",
+      "2026-03-31T07:47:37.111761"
+    ],
+    [
+      406,
+      "BTC_5M",
+      "ENTRY",
+      "all_rules_passed",
+      "UP",
+      0.72,
+      0.0,
+      0.0,
+      1.0,
+      "{\"time\": \"pass\", \"price\": \"pass\", \"btc_move\": \"pass\", \"slippage\": \"pass\", \"event_limit\": \"pass\", \"max_positions\": \"pass\"}",
+      "pf_2f61204e82",
+      "2026-03-31T07:46:25.302726"
+    ],
+    [
+      405,
+      "BTC_5M",
+      "EXIT",
+      "CLOSED",
+      "UP",
+      0.25,
+      0.23,
+      -0.08,
+      1.0,
+      "{}",
+      "pf_ecdaae0ddd",
+      "2026-03-31T07:36:08.734488"
+    ],
+    [
+      404,
+      "BTC_5M",
+      "ENTRY",
+      "all_rules_passed",
+      "UP",
+      0.25,
+      0.0,
+      0.0,
+      1.0,
+      "{\"time\": \"pass\", \"price\": \"pass\", \"btc_move\": \"pass\", \"slippage\": \"pass\", \"event_limit\": \"pass\", \"max_positions\": \"pass\"}",
+      "pf_ecdaae0ddd",
+      "2026-03-31T07:36:01.752870"
+    ],
+    [
+      403,
+      "BTC_5M",
+      "EXIT",
+      "SL",
+      "UP",
+      0.505,
+      0.25,
+      -0.3357,
+      1.0,
+      "{}",
+      "pf_a024d3d83b",
+      "2026-03-31T07:13:15.453565"
+    ]
+  ]
+}

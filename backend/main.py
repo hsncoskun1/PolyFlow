@@ -2,6 +2,7 @@
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))  # POLYFLOW/ dizinini path'e ekle
+sys.path.insert(0, str(Path(__file__).parent))        # backend/ dizinini path'e ekle (config.py)
 
 import asyncio
 import json
@@ -224,6 +225,10 @@ async def simulation_tick():
 
                 rules = _make_asset_rules(sym, cd, mp, key=key)
                 settings_configured = rules.get("time") != "no_settings"
+
+                # Stale data guard — market fiyatı her tick'te güncel işaretle
+                if _EXEC_AVAILABLE and mp.get("up_ask", 0) > 0:
+                    _entry_svc.record_price_update(key)
 
                 # ── ENTRY TRIGGER ─────────────────────────────────────────────
                 # Tüm kurallar PASS + bot çalışıyor + ayarlar var → entry tetikle

@@ -1,0 +1,58 @@
+POLYFLOW Sistem Snapshot
+Oluşturulma: 2026-03-31T04:19:13.029209
+Etiket: diff_test_b
+DB: D:\POLYFLOW\bot.db
+
+======================================================================
+  1. POSITIONS TABLOSU (tüm kayıtlar, son 50)
+======================================================================
+  (kayıt yok)
+
+======================================================================
+  2. OPEN POZİSYON STATE DETAYLARI (fill/order kritik alanlar)
+======================================================================
+  Açık pozisyon: 0  (fill_confirmed: 0/0)
+
+
+======================================================================
+  3. AUDIT LOG (son 50 karar)
+======================================================================
+  İstatistik: {"EXIT": 2, "ORDER_REJECT": 1, "PARTIAL_FILL": 1, "RECONCILE_DISCREPANCY": 1}
+
+  [2026-03-31T03:50:45] RECONCILE_DISCREPANCY BTC_5M        token_balance_zero
+  [2026-03-31T03:50:44] PARTIAL_FILL         ETH_5M        fill_pct:91.0
+  [2026-03-31T03:50:44] ORDER_REJECT         BTC_5M        order_not_filled_status:unmatched
+  [2026-03-31T03:41:08] EXIT                 ETH_5M        HOLD_TO_RESOLUTION  pnl=-20.0000
+  [2026-03-31T03:41:08] EXIT                 BTC_5M        TP  pnl=1.3736
+
+======================================================================
+  4. BOT STATE (safe_mode, session_pnl, diğer kalıcı değerler)
+======================================================================
+  safe_mode                      = false  (güncelleme: 1774917669.0)
+
+======================================================================
+  5. TRADES (son 20 kapanmış trade)
+======================================================================
+  Bugün: 2 trade  toplam PnL=-18.6264
+
+  t_faz2_b00bb0      BTC  UP    entry=0.9100 → exit=0.9600  PnL=+1.3736  [TP] [LIVE]
+  t_hold_c692bc      ETH  UP    entry=0.9000 → exit=0.0000  PnL=-20.0000  [HOLD_TO_RESOLUTION] [LIVE]
+
+======================================================================
+  6. LOG FİLTRESİ (reconciler / sell_retry / error — son 200 satır)
+======================================================================
+  Eşleşen satır sayısı: 0 (son 2000'den)
+
+
+======================================================================
+  7. GENEL ÖZET
+======================================================================
+  Açık pozisyon:  0
+  Toplam position kaydı: 0
+  Toplam trade:   2
+  Audit log kaydı: 5
+  safe_mode:      false
+  session_pnl:    —
+  DB boyutu:      64 KB
+
+Snapshot tamamlandı: D:\POLYFLOW\docs\snapshots\snapshot_20260331_041913_diff_test_b.txt

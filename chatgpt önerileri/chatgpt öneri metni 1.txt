@@ -1,0 +1,354 @@
+Bu tip 1→52 ya da 22→82→22 gibi zıplamalar genelde “tek bir gerçek fiyat sıçraması” değil, veri türlerinin karışması veya yanlış parse edilmesi yüzünden olur.
+
+En olası nedenler:
+
+Bid / ask / last trade / midpoint karışıyor olabilir
+Polymarket’te ekranda görülen fiyat her zaman tek bir kaynak değildir. Dokümana göre fiyatlar 0.00–1.00 aralığındadır; gösterilen fiyat çoğu durumda midpoint’tir, ama spread 0.10’dan büyükse son işlem fiyatı gösterilebilir. Bu yüzden bazen sen bir yerde best bid, başka yerde last trade, başka yerde midpoint okuyorsan veri “hopluyor” gibi görünür.
+Price level delta’yı “son fiyat” gibi okuyorsun
+Market websocket kanalında orderbook delta, last trade, best bid/ask ve tick size değişimi ayrı event tipleri olarak gelir. Orderbook delta içindeki seviye güncellemelerini doğrudan “anlık market fiyatı” diye kullanırsan 22, sonra 82, sonra tekrar 22 gibi sahte sıçramalar görürsün. Çünkü bunlar trade fiyatı değil, orderbook seviyeleridir.
+Yes/No tokenlarını karıştırıyor olabilirsin
+Polymarket binary market yapısında Yes ve No ayrı token olarak işlem görür. Eğer bazen Yes asset_id, bazen No asset_id okuyorsan fiyatlar bir anda tersine dönmüş gibi görünür. Özellikle 22 ↔ 82 tarzı hareket bu hataya çok benzer, çünkü Yes ve No fiyatları kabaca birbirini tamamlar. Polymarket marketlerin Yes/No outcome token’larıyla çalıştığını açıkça belirtiyor.
+Fiyatı 0.22 yerine 22, 0.82 yerine 82 formatında tutuyorsun
+API/WebSocket tarafı fiyatları 0–1 aralığında verir. Sen bunları bazen yüzdeye çevirip bazen çevirmeden logluyorsan 0.22, 0.82, 0.22 akışı ekranda 22, 82, 22 gibi görünür. Bu en yaygın hata tiplerinden biri.
+Tick size değişimi yüzünden küçük bölgelerde adım boyu değişiyor
+Polymarket market channel’da fiyat 0.96 üstüne ya da 0.04 altına geldiğinde minimum tick size değişebiliyor. Yani fiyat çözünürlüğü farklılaşıyor. Bu genelde 22→82 gibi dev zıplama üretmez, ama özellikle çok uç fiyatlarda “neden farklı hassasiyetle geliyor?” sorusunun cevabıdır.
+WebSocket snapshot + delta sıralama problemi
+İlk snapshot gelmeden delta uyguluyorsan, ya da mesajları sırayla işlemiyorsan orderbook yanlış state’e düşer. Sonuçta ekranda olmayan saçma fiyat seviyeleri görürsün. Polymarket market websocket’i orderbook ve trade event’lerini ayrı akıtır; bunları tek akış sanıp uygularsan veri bozulabilir.
+
+Benim teşhisim:
+Senin verdiğin “228222” örneği en çok şu üç şeyden birine benziyor:
+
+Yes ve No token karışması
+Bid/ask ile last trade’in aynı değişkende tutulması
+0.22 / 0.82 değerlerinin yüzde formatında yanlış loglanması
+
+Hızlı kontrol listesi:
+
+Her log satırına event_type yaz
+asset_id ile beraber logla
+side yaz
+Ham fiyatı ve yüzdeye çevrilmiş fiyatı ayrı logla
+örnek: raw_price=0.22, pct_price=22
+Gelen veri last_trade_price mı, best_bid mi, best_ask mı, yoksa orderbook level delta mı ayır
+Yes token ve No token için ayrı state tut
+
+Sağlıklı yapı şöyle olmalı:
+
+trade kararında tek bir “referans fiyat” seç
+genelde:
+entry için best ask / best bid
+UI için midpoint veya best bid/ask
+momentum için last trade veya kendi hesapladığın mid
+orderbook state ayrı
+executed trade state ayrı
+UI display state ayrı
+
+Örnek mantık:
+
+if event_type == "last_trade_price":
+    state.last_trade[token_id] = price
+
+elif event_type == "book":
+    update_orderbook(token_id, bids, asks)
+    state.best_bid[token_id] = top_bid()
+    state.best_ask[token_id] = top_ask()
+    state.mid[token_id] = (top_bid() + top_ask()) / 2
+
+Ama şunu yapmamalısın:
+
+state.price = incoming_price
+
+Çünkü gelen şeyin ne olduğu değişebilir.
+
+
+
+
+Polymarket websocket akışını ve event ayrımını doğrulayıp doğrudan uygulanabilir bir state modeli ile debug şablonu hazırlıyorum. Ardından bunu kod seviyesinde vereceğim.
+
+10s boyunca düşündüm
+
+Aşağıya bozulmayan state modeli, debug formatı ve doğrudan kullanabileceğin tüketici mimarisini bırakıyorum.
+
+Temel hedef şu:
+Tek bir price değişkeni tutmamak. Bunun yerine her şeyi ayrı state’lerde tutmak. Polymarket’te fiyatlar 0.00–1.00 aralığındadır; midpoint, best bid/ask ve last trade ayrı kavramlardır. Ayrıca market websocket kanalı orderbook snapshot/değişimleri, price update’leri ve trade event’lerini aynı genel akış içinde iletir. Bu yüzden bunları tek alan gibi ele almak 22→82→22 tarzı sahte zıplamalar üretir.
+
+Özellikle senin örneğinde 22 ↔ 82 tipi hareketin en kuvvetli şüphelileri şunlar:
+Yes ve No token asset_id’lerini karıştırmak, 0.22 ve 0.82’yi yüzde formatında loglayıp tek seri gibi görmek, ya da orderbook seviyelerini son işlem fiyatı sanmak. Polymarket token bazlı çalışır; market price, midpoint, spread ve last trade ayrı endpoint ve kavramlardır.
+
+Önerdiğim veri modeli:
+
+from dataclasses import dataclass, field
+from decimal import Decimal
+from typing import Dict, List, Optional
+import time
+
+@dataclass
+class BookLevel:
+    price: Decimal
+    size: Decimal
+
+@dataclass
+class TokenState:
+    asset_id: str
+
+    best_bid: Optional[Decimal] = None
+    best_ask: Optional[Decimal] = None
+    midpoint: Optional[Decimal] = None
+    spread: Optional[Decimal] = None
+
+    last_trade_price: Optional[Decimal] = None
+    last_trade_side: Optional[str] = None
+    last_trade_ts: Optional[float] = None
+
+    bids: List[BookLevel] = field(default_factory=list)
+    asks: List[BookLevel] = field(default_factory=list)
+
+    last_seq: Optional[int] = None
+    last_event_type: Optional[str] = None
+    last_update_ts: Optional[float] = None
+
+@dataclass
+class MarketRuntime:
+    tokens: Dict[str, TokenState] = field(default_factory=dict)
+
+    def get_token(self, asset_id: str) -> TokenState:
+        if asset_id not in self.tokens:
+            self.tokens[asset_id] = TokenState(asset_id=asset_id)
+        return self.tokens[asset_id]
+
+Bunun mantığı şu:
+UI fiyatı, trade kararı ve orderbook state’i farklı alanlarda tutulur. Çünkü Polymarket’te midpoint best bid ve best ask ortalamasıdır; displayed price koşullara göre last trade’e de dönebilir. Bu yüzden tek bir “gerçek fiyat” alanı kullanmak doğru değil.
+
+Sağlam event işleme şablonu:
+
+from decimal import Decimal
+
+def dec(x) -> Decimal:
+    return Decimal(str(x))
+
+def recompute_top_levels(ts: TokenState):
+    ts.bids.sort(key=lambda x: x.price, reverse=True)
+    ts.asks.sort(key=lambda x: x.price)
+
+    ts.best_bid = ts.bids[0].price if ts.bids else None
+    ts.best_ask = ts.asks[0].price if ts.asks else None
+
+    if ts.best_bid is not None and ts.best_ask is not None:
+        ts.midpoint = (ts.best_bid + ts.best_ask) / Decimal("2")
+        ts.spread = ts.best_ask - ts.best_bid
+    else:
+        ts.midpoint = None
+        ts.spread = None
+
+def replace_book_side(levels_raw, reverse=False):
+    levels = []
+    for lvl in levels_raw:
+        price = dec(lvl["price"])
+        size = dec(lvl["size"])
+        if size > 0:
+            levels.append(BookLevel(price=price, size=size))
+    levels.sort(key=lambda x: x.price, reverse=reverse)
+    return levels
+
+def apply_snapshot(runtime: MarketRuntime, asset_id: str, event: dict):
+    ts = runtime.get_token(asset_id)
+    ts.bids = replace_book_side(event.get("bids", []), reverse=True)
+    ts.asks = replace_book_side(event.get("asks", []), reverse=False)
+    ts.last_event_type = "snapshot"
+    ts.last_update_ts = time.time()
+    ts.last_seq = event.get("seq")
+    recompute_top_levels(ts)
+
+def apply_book_delta(runtime: MarketRuntime, asset_id: str, event: dict):
+    ts = runtime.get_token(asset_id)
+
+    for change in event.get("changes", []):
+        side = change["side"].lower()
+        price = dec(change["price"])
+        size = dec(change["size"])
+
+        side_levels = ts.bids if side == "buy" else ts.asks
+
+        idx = next((i for i, lvl in enumerate(side_levels) if lvl.price == price), None)
+
+        if size == 0:
+            if idx is not None:
+                side_levels.pop(idx)
+        else:
+            if idx is not None:
+                side_levels[idx].size = size
+            else:
+                side_levels.append(BookLevel(price=price, size=size))
+
+    ts.last_event_type = "book_delta"
+    ts.last_update_ts = time.time()
+    ts.last_seq = event.get("seq")
+    recompute_top_levels(ts)
+
+def apply_trade(runtime: MarketRuntime, asset_id: str, event: dict):
+    ts = runtime.get_token(asset_id)
+    ts.last_trade_price = dec(event["price"])
+    ts.last_trade_side = event.get("side")
+    ts.last_trade_ts = time.time()
+    ts.last_event_type = "trade"
+    ts.last_update_ts = time.time()
+    ts.last_seq = event.get("seq")
+
+def apply_price_change(runtime: MarketRuntime, asset_id: str, event: dict):
+    ts = runtime.get_token(asset_id)
+    ts.last_event_type = "price_change"
+    ts.last_update_ts = time.time()
+    ts.last_seq = event.get("seq")
+
+En kritik kural:
+book delta event’inden gelen price, “son işlem fiyatı” değildir. O bir price level olabilir. trade event’inden gelen price ile aynı anlama gelmez. Orderbook ve trade verisini ayrı state’te tutman gerekir; canlı orderbook için websocket önerilir, last trade için ayrı veri modeli vardır.
+
+Karar mekanizması için önerilen referanslar:
+
+def get_ui_price(ts: TokenState):
+    if ts.midpoint is not None and ts.spread is not None and ts.spread <= Decimal("0.10"):
+        return ts.midpoint
+    return ts.last_trade_price if ts.last_trade_price is not None else ts.midpoint
+
+def get_buy_reference(ts: TokenState):
+    return ts.best_ask
+
+def get_sell_reference(ts: TokenState):
+    return ts.best_bid
+
+def get_momentum_reference(ts: TokenState):
+    return ts.last_trade_price or ts.midpoint
+
+Buradaki mantık Polymarket’in displayed price davranışıyla uyumludur: spread 0.10’dan genişse gösterimde last trade kullanılabilir, aksi halde midpoint öne çıkar. Ama işlem yaparken alımda ask, satımda bid referans alınmalıdır.
+
+Şimdi asıl debug parçası. Senin bug’ını hızlı yakalayacak log formatı şu olmalı:
+
+def pct(x):
+    return None if x is None else float(x * 100)
+
+def debug_log(ts: TokenState, incoming_event: dict):
+    print({
+        "asset_id": ts.asset_id,
+        "event_type": ts.last_event_type,
+        "seq": ts.last_seq,
+        "incoming_raw": incoming_event,
+
+        "best_bid_raw": str(ts.best_bid) if ts.best_bid is not None else None,
+        "best_ask_raw": str(ts.best_ask) if ts.best_ask is not None else None,
+        "mid_raw": str(ts.midpoint) if ts.midpoint is not None else None,
+        "last_trade_raw": str(ts.last_trade_price) if ts.last_trade_price is not None else None,
+
+        "best_bid_pct": pct(ts.best_bid),
+        "best_ask_pct": pct(ts.best_ask),
+        "mid_pct": pct(ts.midpoint),
+        "last_trade_pct": pct(ts.last_trade_price),
+
+        "last_trade_side": ts.last_trade_side,
+        "spread_raw": str(ts.spread) if ts.spread is not None else None,
+        "spread_pct": pct(ts.spread),
+        "bids_top3": [(float(l.price), float(l.size)) for l in ts.bids[:3]],
+        "asks_top3": [(float(l.price), float(l.size)) for l in ts.asks[:3]],
+    })
+
+Bu log sana anında şunu gösterecek:
+0.22 mi geliyor, yoksa 22 mi?
+Trade mi geliyor, yoksa orderbook level mı?
+Aynı asset_id üzerinde misin, yoksa farklı token mı?
+best bid ve best ask mantıklı mı?
+spread saçma mı?
+Bu ayırımı yapmadan zıplama problemi çözülmez. Bu ayrım Polymarket’in ayrı midpoint, spread, market price ve last trade kavramlarıyla doğrudan uyumludur.
+
+22↔82 zıplamasını otomatik tespit eden alarm:
+
+def anomaly_check(ts: TokenState):
+    issues = []
+
+    if ts.best_bid is not None and ts.best_ask is not None:
+        if ts.best_bid > ts.best_ask:
+            issues.append("best_bid > best_ask")
+
+    if ts.midpoint is not None and not (Decimal("0") <= ts.midpoint <= Decimal("1")):
+        issues.append("midpoint_out_of_range")
+
+    if ts.last_trade_price is not None and not (Decimal("0") <= ts.last_trade_price <= Decimal("1")):
+        issues.append("last_trade_out_of_range")
+
+    if ts.last_trade_price is not None and ts.midpoint is not None:
+        diff = abs(ts.last_trade_price - ts.midpoint)
+        if diff >= Decimal("0.25"):
+            issues.append(f"large_trade_mid_gap:{diff}")
+
+    return issues
+
+Neden bu faydalı:
+Polymarket fiyatları 0–1 aralığındadır. 25 puandan büyük gap’ler bazı marketlerde mümkün olsa da çok sık oluyorsa veri türü karışımı, snapshot-delta sırası hatası veya token karışması şüphesi doğurur. Polymarket’in fiyat modeli bu aralıktadır ve spread/bid/ask/last trade ayrı ayrı ele alınmalıdır.
+
+WebSocket tüketici akışı şu sırada olmalı:
+
+async def on_message(runtime: MarketRuntime, msg: dict):
+    event_type = msg.get("event_type") or msg.get("type")
+    asset_id = msg.get("asset_id") or msg.get("token_id")
+
+    if not asset_id:
+        return
+
+    if event_type in ("book", "snapshot", "orderbook_snapshot"):
+        apply_snapshot(runtime, asset_id, msg)
+
+    elif event_type in ("price_change", "tick_size_change", "last_trade_price"):
+        apply_price_change(runtime, asset_id, msg)
+
+    elif event_type in ("trade", "last_trade", "trade_execution"):
+        apply_trade(runtime, asset_id, msg)
+
+    elif event_type in ("book_delta", "price_level_update", "orderbook_update"):
+        apply_book_delta(runtime, asset_id, msg)
+
+    ts = runtime.get_token(asset_id)
+    issues = anomaly_check(ts)
+
+    debug_log(ts, msg)
+
+    if issues:
+        print("ANOMALY", {"asset_id": asset_id, "issues": issues})
+
+Burada isimler birebir senin client kütüphanene göre değişebilir. Esas fikir şu:
+önce event tipini ayır, sonra state’i doğru bölmeye yaz. Polymarket market channel subscription’ı asset ID bazında çalışır ve gerçek zamanlı orderbook, price ve market lifecycle update’leri taşır.
+
+Yes/No karışmasını kesmek için minimum koruma:
+
+YES_ASSET_ID = "..."
+NO_ASSET_ID = "..."
+
+def token_label(asset_id: str) -> str:
+    if asset_id == YES_ASSET_ID:
+        return "YES"
+    if asset_id == NO_ASSET_ID:
+        return "NO"
+    return "UNKNOWN"
+
+Ve log’a bunu ekle:
+
+"token_label": token_label(ts.asset_id)
+
+Eğer ekranda tek seri çiziyorsan şunu yap:
+YES ve NO için ayrı çizgi çiz. Tek çizgiye bastırma. Çünkü bunlar ayrı token’lardır; karıştırırsan 22↔82 gibi hareket “tek market fiyatı” zannedilir. Polymarket market/token modelinde veri token ID üzerinden akar.
+
+Pratik teşhis sırası:
+
+Her event için asset_id, event_type, raw price, pct price logla.
+Tek değişken state.price varsa kaldır.
+best_bid, best_ask, midpoint, last_trade_price ayrı alan olsun.
+YES ve NO tokenları ayrı state olsun.
+Snapshot gelmeden delta uygulama.
+UI’da hangi fiyatı gösterdiğini açıkça seç: midpoint mi last_trade mı.
+Trade kararında alım için ask, satış için bid kullan. Polymarket’te market price ve midpoint aynı şey değildir.
+
+İstersen bir sonraki mesajda bunu senin mevcut Python bot yapına göre:
+
+tek dosyalık çalışır websocket consumer
+CSV debug logger
+UI paneline uygun veri şeması
+force sell mantığına uyarlanmış referans fiyat sistemi
+
+olarak doğrudan entegre edilmiş halde yazayım.
